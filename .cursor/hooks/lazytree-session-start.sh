@@ -29,7 +29,39 @@ if [[ -z "$SESSION_ID" ]]; then
 fi
 
 MAP_FILE="$MAP_DIR/${SESSION_ID}.json"
-LT_BIN="${LAZYTREE_BIN:-lazytree}"
+
+resolve_lt_bin() {
+  if [[ -n "${LAZYTREE_BIN:-}" ]]; then
+    printf '%s' "$LAZYTREE_BIN"
+    return
+  fi
+  if command -v lazytree >/dev/null 2>&1; then
+    command -v lazytree
+    return
+  fi
+  for cand in \
+    "$HOME/.local/bin/lazytree" \
+    "$HOME/.cargo/bin/lazytree" \
+    /usr/local/bin/lazytree
+  do
+    if [[ -x "$cand" ]]; then
+      printf '%s' "$cand"
+      return
+    fi
+  done
+  # Dev tree: walk up from cwd for target/release/lazytree
+  local dir="$PWD"
+  for _ in 1 2 3 4 5 6; do
+    if [[ -x "$dir/target/release/lazytree" ]]; then
+      printf '%s' "$dir/target/release/lazytree"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  printf '%s' "lazytree"
+}
+
+LT_BIN="$(resolve_lt_bin)"
 
 # Prefer existing mapping (idempotent across accidental re-fires).
 if [[ -f "$MAP_FILE" ]]; then
