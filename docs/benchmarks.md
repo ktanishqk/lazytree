@@ -9,7 +9,7 @@ Samples per metric: 5
 ## Honesty notes
 
 - LazyTree **create** includes OverlayFS mount **and** private Git metadata init (seed index byte-copy; `read-tree` only when `--from` ≠ seed).
-- Registration (`repo add`) is intentionally O(repository size) (~235ms for 5k files via `git clone --bare --no-hardlinks` object snapshot + rsync worktree exclude `.git`) and is **not** counted as session create.
+- Registration (`repo add`) is intentionally O(repository size) (~235ms for 5k files via `git clone --bare` object snapshot — hardlinks when source and `$LAZYTREE_HOME` share a device; `--no-hardlinks` cross-device or with `LAZYTREE_OBJECTS_COPY=1` — + rsync worktree exclude `.git`) and is **not** counted as session create.
 - Worktree disk often looks small because Git hardlinks objects; compare working-tree materialization and session-local metadata, not object DB size alone.
 - These numbers are from a nested cloud VM. Absolute milliseconds will differ on bare metal; ratios matter more.
 

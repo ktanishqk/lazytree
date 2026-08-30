@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -65,6 +66,8 @@ impl RepositoryStore {
         // Shared immutable object store (separate from the COW lowerdir).
         // Do not `cp -a .git/objects` directly — concurrent auto-gc removes
         // loose object dirs mid-walk. A bare clone is a consistent snapshot.
+        // Same-device: allow hardlinks (faster). Cross-device or
+        // LAZYTREE_OBJECTS_COPY=1: --no-hardlinks (full copy).
         {
             if objects.exists() {
                 fs::remove_dir_all(&objects)?;
@@ -73,15 +76,24 @@ impl RepositoryStore {
             if bare.exists() {
                 fs::remove_dir_all(&bare)?;
             }
-            let status = Command::new("git")
-                .args([
-                    "clone",
-                    "--bare",
-                    "--quiet",
-                    "--no-hardlinks",
-                    source.to_str().unwrap_or("."),
-                    bare.to_str().unwrap_or(".objects-clone.git"),
-                ])
+            let force_copy = std::env::var_os("LAZYTREE_OBJECTS_COPY")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            let cross_device = match (
+                fs::metadata(&source),
+                fs::metadata(&self.paths.home),
+            ) {
+                (Ok(src_meta), Ok(home_meta)) => src_meta.dev() != home_meta.dev(),
+                _ => true,
+            };
+            let mut cmd = Command::new("git");
+            cmd.args(["clone", "--bare", "--quiet"]);
+            if force_copy || cross_device {
+                cmd.arg("--no-hardlinks");
+            }
+            let status = cmd
+                .arg(source.to_str().unwrap_or("."))
+                .arg(bare.to_str().unwrap_or(".objects-clone.git"))
                 .status()
                 .context("git clone --bare for object store")?;
             if !status.success() {

@@ -32,7 +32,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D11 (M4):** Treat FUSE `git status` overhead as first-class; prefer kernel OverlayFS where available; background-warm after create.
 - **D12.** Do not put `.git` inside the OverlayFS lowerdir.
 - **D13.** Seed sessions by copying `seed/index` when `--from` matches `base_commit`; else `read-tree`.
-- **D14.** Registration must **exclude** `.git` from the worktree copy (never `cp` then delete) — races with auto-gc on large commits.
+- **D14.** Registration must **exclude** `.git` from the worktree copy (never `cp` then delete) — races with auto-gc on large commits. Object snapshot: bare clone hardlinks same-device; `--no-hardlinks` cross-device or `LAZYTREE_OBJECTS_COPY=1`.
 - **D15.** Cursor soft integration: hook + skill + gates; `sessionStart` is advisory; gates fail-open without mapping.
 - **D16.** Path-sensitive build caches: `lazytree exec` remaps to `$LAZYTREE_HOME/canonical/{workspace,target}` via user mount namespace.
 
