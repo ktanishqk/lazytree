@@ -29,7 +29,7 @@ cargo build --release
 ./target/release/lazytree --help
 ```
 
-## Milestone 1 CLI
+## CLI
 
 ```bash
 lazytree repo add <path>
@@ -46,9 +46,34 @@ lazytree destroy <session> [--force]
 lazytree exec <session> -- <command>
 lazytree cache promote <session>
 lazytree cache seed <session>
+lazytree cursor setup [--target <project>]
+lazytree cursor open <session> [--json|--dry-run]
 ```
 
 `LAZYTREE_HOME` (default `~/.lazytree`) controls metadata and session storage.
+
+## Cursor soft integration
+
+Install hooks + skill into a consumer project:
+
+```bash
+lazytree cursor setup --target ~/src/my-repo
+```
+
+Then Cmd+N: `sessionStart` creates a LazyTree session, injects context, and gates
+deny writes / `git commit|push` outside that root. Optional UI branch sync:
+
+```bash
+lazytree cursor open <session>
+```
+
+See `docs/cursor-integration.md`. Validate with `./scripts/test_cursor_hooks.sh`.
+
+## npm wrapper
+
+```bash
+cd npm && npm link   # requires native binary on PATH or LAZYTREE_BIN
+```
 
 ## Milestone 0
 

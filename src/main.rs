@@ -1,4 +1,5 @@
 mod cli;
+mod cursor_integration;
 mod doctor;
 mod filesystem;
 mod git;

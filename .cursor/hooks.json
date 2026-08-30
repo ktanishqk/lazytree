@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/lazytree-session-start.sh"
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": ".cursor/hooks/lazytree-pretool-gate.sh",
+        "matcher": "Write|Edit|Delete|ApplyPatch|StrReplace"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": ".cursor/hooks/lazytree-shell-gate.sh",
+        "matcher": "git\\s+(commit|push)"
+      }
+    ]
+  }
+}

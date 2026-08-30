@@ -93,6 +93,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: CacheCommands,
     },
+    /// Cursor IDE integration helpers
+    Cursor {
+        #[command(subcommand)]
+        command: CursorCommands,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,6 +106,31 @@ pub enum CacheCommands {
     Promote { session: String },
     /// Populate session target from the shared seed
     Seed { session: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CursorCommands {
+    /// Open session root in Cursor/VS Code so UI Git binds to our branch
+    Open {
+        session: String,
+        /// Editor binary (default: cursor, then code, or $LAZYTREE_EDITOR)
+        #[arg(long)]
+        editor: Option<String>,
+        /// Print JSON path/branch and do not launch an editor
+        #[arg(long)]
+        json: bool,
+        /// Print path/branch only; do not launch an editor
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Print hook/skill setup instructions (and optionally install into a project)
+    Setup {
+        /// Copy `.cursor` hooks + skill into this project directory
+        #[arg(long)]
+        target: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -287,6 +317,61 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                     println!("Seeded target cache for {session} from shared seed");
                 } else {
                     println!("No shared target seed available for {session}");
+                }
+            }
+        },
+        Commands::Cursor { command } => match command {
+            CursorCommands::Open {
+                session,
+                editor,
+                json,
+                dry_run,
+            } => {
+                let s = sessions.get(&session)?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&crate::cursor_integration::open_session_info(
+                            &s
+                        ))?
+                    );
+                } else if dry_run {
+                    println!("{}\t{}", s.root_path().display(), s.branch);
+                } else {
+                    let ed = editor.unwrap_or_else(crate::cursor_integration::resolve_editor);
+                    println!(
+                        "Opening {} (branch {}) in {ed}",
+                        s.root_path().display(),
+                        s.branch
+                    );
+                    crate::cursor_integration::open_session(&s, &ed)?;
+                }
+            }
+            CursorCommands::Setup { target, json } => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                if let Some(target) = target {
+                    let bundled = crate::cursor_integration::find_bundled_assets()?;
+                    let written = crate::cursor_integration::install_into_project(&bundled, &target)?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "target": target,
+                                "bundled_from": bundled,
+                                "written": written,
+                            }))?
+                        );
+                    } else {
+                        println!(
+                            "Installed LazyTree Cursor assets into {}",
+                            target.join(".cursor").display()
+                        );
+                        for p in written {
+                            println!("  {}", p.display());
+                        }
+                    }
+                } else {
+                    crate::cursor_integration::print_integration_hints(&cwd);
                 }
             }
         },
