@@ -43,6 +43,7 @@ echo "session root: $ROOT_PATH"
 echo "== fsmonitor config (session-local) =="
 git -C "$ROOT_PATH" config --get core.fsmonitor || echo "(fsmonitor not set — check LAZYTREE_FSMONITOR)"
 git -C "$ROOT_PATH" config --get core.fsmonitorHookVersion || true
+git -C "$ROOT_PATH" config --get fsmonitor.allowRemote || echo "(allowRemote unset — FUSE mounts may disable fsmonitor)"
 
 echo "== real git status (1st / 2nd) =="
 if command -v time >/dev/null 2>&1; then

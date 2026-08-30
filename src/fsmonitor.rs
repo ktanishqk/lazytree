@@ -148,8 +148,10 @@ if [[ "$token" == lt:* ]]; then
 fi
 printf 'lt:%s\0' "$n"
 if [[ -d "$UPPER" ]]; then
-  find "$UPPER" \( -type f -o -type l -o -type c -o -type d \) ! -path "$UPPER" -printf '%P\0' 2>/dev/null \
-    | while IFS= read -r -d '' rel; do
+  # Portable walk (GNU find -printf is Linux-only; macOS uses this path if LT_BIN missing).
+  find "$UPPER" \( -type f -o -type l -o -type c -o -type d \) ! -path "$UPPER" 2>/dev/null \
+    | while IFS= read -r p; do
+        rel="${{p#"$UPPER"/}}"
         case "$rel" in .git|.git/*) continue ;; esac
         printf '%s\0' "$rel"
       done
@@ -170,24 +172,24 @@ fi
     }
 
     // Use git-config so quoting stays valid.
-    let status = Command::new("git")
-        .args(["--git-dir"])
-        .arg(&abs_git)
-        .args(["config", "core.fsmonitor"])
-        .arg(&hook_path)
-        .status()
-        .context("git config core.fsmonitor")?;
-    if !status.success() {
-        bail!("failed to set core.fsmonitor");
-    }
-    let status = Command::new("git")
-        .args(["--git-dir"])
-        .arg(&abs_git)
-        .args(["config", "core.fsmonitorHookVersion", "2"])
-        .status()
-        .context("git config core.fsmonitorHookVersion")?;
-    if !status.success() {
-        bail!("failed to set core.fsmonitorHookVersion");
+    let configs = [
+        ("core.fsmonitor", hook_path.to_string_lossy().into_owned()),
+        ("core.fsmonitorHookVersion", "2".into()),
+        // macFUSE / Fuse-T / unionfs mounts are classified as "remote" by Git;
+        // without this, Darwin disables our hook and status full-scans the FUSE tree.
+        ("fsmonitor.allowRemote", "true".into()),
+    ];
+    for (key, val) in configs {
+        let status = Command::new("git")
+            .args(["--git-dir"])
+            .arg(&abs_git)
+            .args(["config", key])
+            .arg(&val)
+            .status()
+            .with_context(|| format!("git config {key}"))?;
+        if !status.success() {
+            bail!("failed to set {key}");
+        }
     }
     Ok(())
 }

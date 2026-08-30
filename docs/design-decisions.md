@@ -37,7 +37,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D16.** Path-sensitive build caches: `lazytree exec` remaps to `$LAZYTREE_HOME/canonical/{workspace,target}` via user mount namespace.
 - **D17.** Cross-OS COW: preserve overlay semantics. Linux = OverlayFS / fuse-overlayfs; macOS = unionfs-fuse. Reject clone-tree as the portable default (O(n) create). Windows deferred.
 - **D18.** Filesystem backends are **plugins** (`OverlayBackend` trait): orchestrator in `filesystem/mod.rs`, registry per OS, concrete plugins under `filesystem/plugins/`. Session/CLI stay backend-agnostic.
-- **D19.** Session Git sets `core.fsmonitor` (v2) to an upperdir-backed hook. Real `git status` still runs; we do not PATH-wrap `git`. Disable with `LAZYTREE_FSMONITOR=0`.
+- **D19.** Session Git sets `core.fsmonitor` (v2) to an upperdir-backed hook, plus `fsmonitor.allowRemote=true` (macFUSE/unionfs worktrees are classified “remote”). Real `git status` still runs; we do not PATH-wrap `git`. Disable with `LAZYTREE_FSMONITOR=0`.
 
 ## Open follow-ups
 
