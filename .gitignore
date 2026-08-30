@@ -4,3 +4,8 @@
 *.swp
 .DS_Store
 /tmp/
+
+
+# Added by cargo
+
+/target

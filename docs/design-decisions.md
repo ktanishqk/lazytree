@@ -27,4 +27,10 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D1.** Keep a `FilesystemBackend` interface; implement `FuseOverlayFs` first for Cloud Agent viability, `KernelOverlayFs` when the host allows.
 - **D2.** Prefer least privilege, but allow an explicit sudo mount helper rather than silently escalating arbitrary commands.
 - **D3.** Do not claim O(1) workspace creation until Git init is measured separately (PRD §30).
+
+## Decisions locked in M1
+
+- **D4.** Do not `chmod a-w` the immutable base when using fuse-overlayfs: `default_permissions` then denies writes before copy-up. Immutability is by LazyTree never writing the base.
+- **D5.** Privileged fuse-overlayfs mounts pass `uid`/`gid` of the invoking user plus `allow_other` so agents can write the merged view.
+- **D6.** M1 session `git.state` is `placeholder`; shared lower `.git` is visible but not yet session-private (M2).
 EOF

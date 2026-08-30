@@ -2,20 +2,46 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: Milestone 0 feasibility spike. Not yet a usable product CLI.
+> Status: Milestone 1 — filesystem workspace CLI (Git isolation is Milestone 2).
 
 ## Idea
 
-Give each coding agent a normal directory and Git branch, backed by a COW filesystem view instead of a fully materialized `git worktree` checkout.
+Give each coding agent a normal directory backed by a COW filesystem view instead of a fully materialized `git worktree` checkout.
 
-```text
+```bash
+lazytree repo add ~/src/my-repo
 lazytree create ticket-123
-# → ~/.lazytree/workspaces/ticket-123/root
+cd "$(lazytree path ticket-123)"
 ```
 
-## Milestone 0
+## Prerequisites (Linux)
 
-Prove dual OverlayFS-style sessions over one immutable base.
+- `git`
+- `fuse-overlayfs` (and passwordless `sudo` for mounts in nested/cloud VMs where unprivileged FUSE is blocked)
+- Or kernel OverlayFS when the host allows unprivileged/privileged `mount -t overlay`
+
+## Build
+
+```bash
+cargo build --release
+./target/release/lazytree --help
+```
+
+## Milestone 1 CLI
+
+```bash
+lazytree repo add <path>
+lazytree repo list
+lazytree repo remove <repo>
+lazytree create <name>
+lazytree list
+lazytree path <session>
+lazytree destroy <session>
+```
+
+`LAZYTREE_HOME` (default `~/.lazytree`) controls metadata and session storage.
+
+## Milestone 0
 
 ```bash
 ./scripts/m0_overlay_spike.sh
@@ -26,5 +52,4 @@ See `docs/feasibility-m0.md` and `docs/design-decisions.md`.
 
 ## License
 
-Apache-2.0 or MIT (TBD before first release).
-EOF
+Apache-2.0
