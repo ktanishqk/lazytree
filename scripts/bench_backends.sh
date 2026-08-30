@@ -229,8 +229,10 @@ cargo build --release
 
 ## Interpretation
 
-- If **FS fork P50** stays low on unionfs (~single-digit ms) and flat across tiny → medium → fat, the macOS plugin preserves the overlay create model (not clone-tree).
-- If **first git status** is much worse on unionfs than fuse-overlayfs, expect a similar FUSE tax on Darwin — warm-status still matters.
+- **Create stays ~O(1):** FS fork P50 should stay single-digit ms and flat across tiny → medium → fat (overlay model, not clone-tree).
+- **unionfs vs fuse-overlayfs create:** expect near-parity on the create/mount axis.
+- **First git status:** unionfs is often somewhat slower (FUSE tax); warm-status still matters on Darwin.
+- On Linux this file is a **macOS plugin proxy**. On Darwin, treat absolute ms as the real Mac numbers.
 
 FOOT
 } | tee "$OUT_MD"
