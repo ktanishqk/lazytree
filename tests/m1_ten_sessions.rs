@@ -107,7 +107,7 @@ fn ten_isolated_writable_sessions() {
     assert_eq!(list.lines().count(), 10);
 
     for i in 0..10 {
-        let out = run_lt(&home, &["destroy", &format!("s{i}")]);
+        let out = run_lt(&home, &["destroy", &format!("s{i}"), "--force"]);
         assert_ok(&out, &format!("destroy s{i}"));
     }
 

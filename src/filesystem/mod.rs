@@ -1,3 +1,3 @@
-mod overlayfs;
+pub mod overlayfs;
 
-pub use overlayfs::{mount_session, umount_path, MountRequest};
+pub use overlayfs::{is_mounted, mount_session, umount_path, MountRequest};

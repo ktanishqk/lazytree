@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -35,6 +36,8 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     /// Absolute path to session directory under LazyTree home.
     pub session_dir: String,
+    #[serde(default)]
+    pub lifecycle: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +57,24 @@ pub struct RuntimeMeta {
     pub state: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionStatus {
+    pub id: String,
+    pub name: String,
+    pub branch: String,
+    pub dirty: bool,
+    pub unexported_commits: u64,
+    pub filesystem_state: String,
+    pub filesystem_backend: FilesystemBackendKind,
+    pub git_state: String,
+    pub runtime_state: String,
+    pub lifecycle: String,
+    pub upper_files: u64,
+    pub filesystem_bytes_written: u64,
+    pub root: String,
+    pub age_seconds: i64,
+}
+
 impl Session {
     pub fn root_path(&self) -> PathBuf {
         PathBuf::from(&self.session_dir).join("fs").join("root")
@@ -67,6 +88,10 @@ impl Session {
     #[allow(dead_code)]
     pub fn work_path(&self) -> PathBuf {
         PathBuf::from(&self.session_dir).join("fs").join("work")
+    }
+
+    pub fn git_dir(&self) -> PathBuf {
+        PathBuf::from(&self.session_dir).join("git")
     }
 }
 
@@ -171,6 +196,7 @@ impl SessionStore {
             created_at: now,
             updated_at: now,
             session_dir: session_dir.display().to_string(),
+            lifecycle: "ready".into(),
         };
         atomic_write_json(&session_dir.join("metadata.json"), &session)?;
         Ok(session)
@@ -205,13 +231,174 @@ impl SessionStore {
         bail!("session not found: {name_or_id}");
     }
 
-    pub fn destroy(&self, name_or_id: &str, _force: bool) -> Result<()> {
-        let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
+    pub fn status(&self, name_or_id: &str) -> Result<SessionStatus> {
         let session = self.get(name_or_id)?;
         let root = session.root_path();
+        let upper = session.upper_path();
 
-        filesystem::umount_path(&root)
-            .with_context(|| format!("unmounting {}", root.display()))?;
+        let dirty = if root.exists() && session.filesystem.state == "mounted" {
+            !git_porcelain(&root)?.is_empty()
+        } else {
+            false
+        };
+
+        let unexported = if session.git_dir().join("HEAD").exists() {
+            count_unexported(&session)?
+        } else {
+            0
+        };
+
+        let (upper_files, bytes) = dir_stats(&upper)?;
+        let age = (Utc::now() - session.created_at).num_seconds();
+
+        Ok(SessionStatus {
+            id: session.id,
+            name: session.name,
+            branch: session.branch,
+            dirty,
+            unexported_commits: unexported,
+            filesystem_state: session.filesystem.state,
+            filesystem_backend: session.filesystem.backend,
+            git_state: session.git.state,
+            runtime_state: session.runtime.state,
+            lifecycle: session.lifecycle,
+            upper_files,
+            filesystem_bytes_written: bytes,
+            root: root.display().to_string(),
+            age_seconds: age,
+        })
+    }
+
+    pub fn diff(&self, name_or_id: &str) -> Result<String> {
+        let session = self.get(name_or_id)?;
+        ensure_active_fs(&session)?;
+        let out = Command::new("git")
+            .args(["-C"])
+            .arg(session.root_path())
+            .args(["diff", "HEAD"])
+            .output()
+            .context("git diff")?;
+        if !out.status.success() {
+            bail!(
+                "git diff failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let staged = Command::new("git")
+            .args(["-C"])
+            .arg(session.root_path())
+            .args(["diff", "--cached"])
+            .output()
+            .context("git diff --cached")?;
+        if staged.status.success() && !staged.stdout.is_empty() {
+            text.push_str("\n# staged\n");
+            text.push_str(&String::from_utf8_lossy(&staged.stdout));
+        }
+        Ok(text)
+    }
+
+    pub fn archive(&self, name_or_id: &str) -> Result<Session> {
+        let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
+        let mut session = self.get(name_or_id)?;
+        if session.lifecycle == "archived" {
+            bail!("session already archived: {}", session.name);
+        }
+        ensure_active_fs(&session)?;
+
+        let repo = self.repos.get(&session.repository_id)?;
+        // Publish branch into the user's source repository.
+        let status = Command::new("git")
+            .arg("--git-dir")
+            .arg(session.git_dir())
+            .args([
+                "push",
+                &repo.source_path,
+                &format!("HEAD:refs/heads/{}", session.branch),
+            ])
+            .output()
+            .context("git push to source repository")?;
+        if !status.status.success() {
+            bail!(
+                "failed to publish branch to {}: {}",
+                repo.source_path,
+                String::from_utf8_lossy(&status.stderr).trim()
+            );
+        }
+
+        let root = session.root_path();
+        filesystem::umount_path(&root)?;
+
+        // Drop expensive ephemeral layers; keep metadata.
+        let fs_dir = PathBuf::from(&session.session_dir).join("fs");
+        for sub in ["upper", "work", "root"] {
+            let p = fs_dir.join(sub);
+            if p.exists() {
+                let _ = fs::remove_dir_all(&p);
+                let _ = fs::create_dir_all(&p);
+            }
+        }
+        let git_dir = session.git_dir();
+        if git_dir.exists() {
+            fs::remove_dir_all(&git_dir)?;
+        }
+        let runtime = PathBuf::from(&session.session_dir).join("runtime");
+        if runtime.exists() {
+            let _ = fs::remove_dir_all(&runtime);
+            let _ = fs::create_dir_all(&runtime);
+        }
+        let semantic = PathBuf::from(&session.session_dir)
+            .join("semantic")
+            .join("writable");
+        if semantic.exists() {
+            let _ = fs::remove_dir_all(&semantic);
+            let _ = fs::create_dir_all(&semantic);
+        }
+
+        session.filesystem.state = "archived".into();
+        session.git.state = "published".into();
+        session.semantic.state = "none".into();
+        session.runtime.state = "none".into();
+        session.lifecycle = "archived".into();
+        session.updated_at = Utc::now();
+        atomic_write_json(
+            &PathBuf::from(&session.session_dir).join("metadata.json"),
+            &session,
+        )?;
+        Ok(session)
+    }
+
+    pub fn destroy(&self, name_or_id: &str, force: bool) -> Result<()> {
+        let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
+        let session = self.get(name_or_id)?;
+
+        if session.lifecycle != "archived" && !force {
+            if session.filesystem.state == "mounted" {
+                let dirty = !git_porcelain(&session.root_path())?.is_empty();
+                let unexported = count_unexported(&session)?;
+                if dirty || unexported > 0 {
+                    bail!(
+                        "workspace has {}{}{}\nUse:\n  lazytree diff {}\n  lazytree archive {}\n  lazytree destroy {} --force",
+                        if dirty { "uncommitted changes" } else { "" },
+                        if dirty && unexported > 0 { " and " } else { "" },
+                        if unexported > 0 {
+                            "commits that have not been exported"
+                        } else {
+                            ""
+                        },
+                        session.name,
+                        session.name,
+                        session.name
+                    );
+                }
+            }
+        }
+
+        let root = session.root_path();
+        if filesystem::is_mounted(&root)? {
+            filesystem::umount_path(&root)
+                .with_context(|| format!("unmounting {}", root.display()))?;
+        }
 
         let dir = PathBuf::from(&session.session_dir);
         if dir.exists() {
@@ -229,6 +416,82 @@ impl SessionStore {
         }
         Ok(None)
     }
+}
+
+fn ensure_active_fs(session: &Session) -> Result<()> {
+    if session.lifecycle == "archived" || session.filesystem.state != "mounted" {
+        bail!("session {} is not an active mounted workspace", session.name);
+    }
+    if !filesystem::is_mounted(&session.root_path())? {
+        bail!(
+            "session {} is not mounted; run `lazytree doctor`",
+            session.name
+        );
+    }
+    Ok(())
+}
+
+fn git_porcelain(work_tree: &Path) -> Result<String> {
+    let out = Command::new("git")
+        .args(["-C"])
+        .arg(work_tree)
+        .args(["status", "--porcelain"])
+        .output()
+        .context("git status")?;
+    if !out.status.success() {
+        bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn count_unexported(session: &Session) -> Result<u64> {
+    let out = Command::new("git")
+        .arg("--git-dir")
+        .arg(session.git_dir())
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{}..HEAD", session.base_revision),
+        ])
+        .output()
+        .context("git rev-list")?;
+    if !out.status.success() {
+        // If rev-list fails (e.g. missing git), treat as unknown/unsafe.
+        bail!(
+            "git rev-list failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let n = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>()?;
+    Ok(n)
+}
+
+fn dir_stats(path: &Path) -> Result<(u64, u64)> {
+    if !path.exists() {
+        return Ok((0, 0));
+    }
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    fn walk(p: &Path, files: &mut u64, bytes: &mut u64) -> Result<()> {
+        if p.is_file() {
+            *files += 1;
+            *bytes += fs::metadata(p)?.len();
+            return Ok(());
+        }
+        if p.is_dir() {
+            for entry in fs::read_dir(p)? {
+                let entry = entry?;
+                // skip overlay work internals whiteouts counting as files is fine
+                walk(&entry.path(), files, bytes)?;
+            }
+        }
+        Ok(())
+    }
+    walk(path, &mut files, &mut bytes)?;
+    Ok((files, bytes))
 }
 
 fn validate_name(name: &str) -> Result<()> {

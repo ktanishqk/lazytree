@@ -1,4 +1,5 @@
 mod cli;
+mod doctor;
 mod filesystem;
 mod git;
 mod locking;

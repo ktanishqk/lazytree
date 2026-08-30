@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use crate::doctor;
 use crate::metadata::Paths;
 use crate::repository::RepositoryStore;
 use crate::session::SessionStore;
@@ -48,10 +49,31 @@ pub enum Commands {
     Path {
         session: String,
     },
+    /// Show session status
+    Status {
+        session: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show session diff (worktree + staged)
+    Diff {
+        session: String,
+    },
+    /// Publish branch to source repo and drop ephemeral workspace state
+    Archive {
+        session: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check metadata vs reality
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
     /// Destroy a session
     Destroy {
         session: String,
-        /// Skip dirty checks (M1: always allowed; enforced properly in M3)
+        /// Skip dirty / unexported-commit checks
         #[arg(long)]
         force: bool,
     },
@@ -143,11 +165,16 @@ pub fn run(cli: Cli) -> Result<()> {
                 println!("(no sessions)");
             } else {
                 for s in list {
+                    let state = if s.lifecycle == "archived" {
+                        "archived"
+                    } else {
+                        s.filesystem.state.as_str()
+                    };
                     println!(
                         "{}\t{}\t{}\t{}",
                         s.name,
                         s.id,
-                        s.filesystem.state,
+                        state,
                         s.root_path().display()
                     );
                 }
@@ -156,6 +183,52 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Path { session } => {
             let s = sessions.get(&session)?;
             println!("{}", s.root_path().display());
+        }
+        Commands::Status { session, json } => {
+            let st = sessions.status(&session)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&st)?);
+            } else {
+                println!("name:                 {}", st.name);
+                println!("branch:               {}", st.branch);
+                println!("dirty:                {}", st.dirty);
+                println!("unexported_commits:   {}", st.unexported_commits);
+                println!("filesystem:           {} ({:?})", st.filesystem_state, st.filesystem_backend);
+                println!("git:                  {}", st.git_state);
+                println!("runtime:              {}", st.runtime_state);
+                println!("lifecycle:            {}", st.lifecycle);
+                println!("upper_files:          {}", st.upper_files);
+                println!("filesystem_bytes:     {}", st.filesystem_bytes_written);
+                println!("root:                 {}", st.root);
+                println!("age_seconds:          {}", st.age_seconds);
+            }
+        }
+        Commands::Diff { session } => {
+            let text = sessions.diff(&session)?;
+            print!("{text}");
+        }
+        Commands::Archive { session, json } => {
+            let s = sessions.archive(&session)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            } else {
+                println!("Archived {}: branch {} published", s.name, s.branch);
+            }
+        }
+        Commands::Doctor { json } => {
+            let report = doctor::run_doctor(&paths, &sessions, &repos)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else if report.issues.is_empty() {
+                println!("ok: no issues found");
+            } else {
+                for i in &report.issues {
+                    println!("[{}] {}: {}", i.severity, i.code, i.message);
+                }
+                if !report.ok {
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Destroy { session, force } => {
             sessions.destroy(&session, force)?;

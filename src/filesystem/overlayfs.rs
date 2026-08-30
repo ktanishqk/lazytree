@@ -163,13 +163,20 @@ pub fn umount_path(path: &Path) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
+
+    // If it is no longer a mountpoint, treat as success (race with archive/doctor).
+    if !is_mounted(path)? {
+        return Ok(());
+    }
+
     let stderr = String::from_utf8_lossy(&output.stderr);
     bail!("failed to unmount {}: {stderr}", path.display());
 }
 
 pub fn is_mounted(path: &Path) -> Result<bool> {
+    // -M matches the path only if it is itself a mountpoint (not a parent FS).
     let output = Command::new("findmnt")
-        .arg("-T")
+        .arg("-M")
         .arg(path)
         .output()
         .context("findmnt")?;

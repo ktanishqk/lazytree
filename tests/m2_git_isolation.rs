@@ -183,11 +183,11 @@ fn independent_git_state_and_discovery() {
 
     // Cleanup
     for name in ["ticket-a", "ticket-b"] {
-        assert_ok(&run_lt(&home, &["destroy", name]), name);
+        assert_ok(&run_lt(&home, &["destroy", name, "--force"]), name);
     }
     for i in 0..10 {
         assert_ok(
-            &run_lt(&home, &["destroy", &format!("untouched-{i}")]),
+            &run_lt(&home, &["destroy", &format!("untouched-{i}"), "--force"]),
             "destroy untouched",
         );
     }
