@@ -196,7 +196,7 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         }
     }
 
-    // Host capabilities (informational / platform-aware).
+    // Host capabilities (informational / platform-aware via FS plugins).
     for (severity, code, message) in crate::filesystem::doctor_host_issues() {
         issues.push(issue(&severity, &code, message));
     }
@@ -204,18 +204,6 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         "info",
         "lazytree_home",
         format!("LAZYTREE_HOME={}", paths.home.display()),
-    ));
-    #[cfg(target_os = "macos")]
-    issues.push(issue(
-        "info",
-        "fs_backend_macos",
-        "macOS sessions use unionfs-fuse (OverlayFS is Linux-only)".into(),
-    ));
-    #[cfg(target_os = "linux")]
-    issues.push(issue(
-        "info",
-        "fs_backend_linux",
-        "Linux sessions prefer kernel OverlayFS, then fuse-overlayfs".into(),
     ));
 
     let ok = !issues.iter().any(|i| i.severity == "error");
