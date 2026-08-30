@@ -17,7 +17,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 | 9 | Is `git status` dominant startup cost? | **Cold status on fuse-overlayfs yes** (~195ms / 5k); **warm ~7–20ms**. Create now spawns a background warm. |
 | 10 | Elevated privileges | **Yes in this Cloud VM:** sudo fuse-overlayfs required. |
 | 11 | Docker / Cursor cloud breakage | **Observed:** nested overlay + FUSE policy forces privileged fuse-overlayfs. |
-| 12 | macOS changes | **Deferred.** |
+| 12 | macOS changes | **unionfs-fuse** (macFUSE/Fuse-T). Same lower/upper mount model; Auto picks it on Darwin. No clone-tree default (create must stay ~O(1)). |
 | 13 | When LazyTree beats worktree | **Create: always in refreshed M4** (tiny ~2×, medium ~19×, large ~40×). Fat disk: ~220KB vs ~164MB. |
 | 14 | Disk usage lower in practice? | **Fat content: yes.** Metadata-only sessions can look larger than hardlinked worktrees on tiny repos. |
 | 15 | Does editor/LSP indexing dominate? | **PSS matters, not RSS.** OverlayFS does not merge N LSP heaps — still the real multi-agent tax. |
@@ -35,10 +35,12 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D14.** Registration must **exclude** `.git` from the worktree copy (never `cp` then delete) — races with auto-gc on large commits. Object snapshot: bare clone hardlinks same-device; `--no-hardlinks` cross-device or `LAZYTREE_OBJECTS_COPY=1`.
 - **D15.** Cursor soft integration: hook + skill + gates; `sessionStart` is advisory; gates fail-open without mapping.
 - **D16.** Path-sensitive build caches: `lazytree exec` remaps to `$LAZYTREE_HOME/canonical/{workspace,target}` via user mount namespace.
+- **D17.** Cross-OS COW: preserve overlay semantics. Linux = OverlayFS / fuse-overlayfs; macOS = unionfs-fuse. Reject clone-tree as the portable default (O(n) create). Windows deferred.
 
 ## Open follow-ups
 
 - Kernel OverlayFS path when unprivileged mounts work (drop sudo fuse).
 - Optional sync create `--warm-status` for CI that needs immediate status numbers.
 - npm binary download in postinstall (currently PATH/LAZYTREE_BIN only).
-- macOS backend (APFS clones / FUSE).
+- macOS: measure create/status vs Linux fuse; optional APFS `clonefile` only for unionfs copy-up.
+- Windows: not in scope (WSL2 or experimental WinFsp later).

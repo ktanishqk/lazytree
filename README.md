@@ -22,6 +22,16 @@ git branch --show-current   # lazytree/ticket-123
 - `fuse-overlayfs` (and passwordless `sudo` for mounts in nested/cloud VMs where unprivileged FUSE is blocked)
 - Or kernel OverlayFS when the host allows unprivileged/privileged `mount -t overlay`
 
+## Prerequisites (macOS)
+
+- `git`
+- [macFUSE](https://macfuse.github.io/) or [Fuse-T](https://www.fuse-t.org/)
+- `unionfs-fuse` (Homebrew: `brew install unionfs-fuse` — binary may be `unionfs` or `unionfs-fuse`)
+
+macOS uses **unionfs-fuse** for the same lower/upper COW mount shape as Linux OverlayFS.
+Session create stays a mount (not a full tree clone). Canonical `lazytree exec` bind-mounts
+are Linux-only; on macOS exec runs in the session root with semantic cache env set.
+
 ## Build
 
 ```bash

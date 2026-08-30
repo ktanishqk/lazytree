@@ -96,6 +96,8 @@ pub enum FilesystemBackendKind {
     Auto,
     KernelOverlayfs,
     FuseOverlayfs,
+    /// unionfs-fuse (macOS primary; optional on Linux).
+    UnionfsFuse,
 }
 
 pub fn load_config(paths: &Paths) -> Result<ConfigFile> {

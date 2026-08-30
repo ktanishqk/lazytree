@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use crate::metadata::Paths;
 use crate::semantic::SemanticPaths;
 use crate::session::{Lifecycle, Session};
-use crate::util::shell_quote;
+use crate::util::{copy_tree_cow, shell_quote};
 
 const CANON_WORKSPACE: &str = "workspace";
 const CANON_TARGET: &str = "target";
@@ -151,11 +151,18 @@ fn canonical_dir() -> Result<PathBuf> {
 }
 
 fn canonical_supported() -> bool {
-    Command::new("unshare")
-        .args(["--user", "--map-root-user", "--mount", "true"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    #[cfg(not(target_os = "linux"))]
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("unshare")
+            .args(["--user", "--map-root-user", "--mount", "true"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
 }
 
 pub fn promote_session_target_to_shared(semantic: &SemanticPaths) -> Result<()> {
@@ -167,15 +174,7 @@ pub fn promote_session_target_to_shared(semantic: &SemanticPaths) -> Result<()> 
     if dst.exists() {
         fs::remove_dir_all(&dst)?;
     }
-    let status = Command::new("cp")
-        .args(["-a", "--reflink=auto"])
-        .arg(&src)
-        .arg(&dst)
-        .status()
-        .context("cp target seed")?;
-    if !status.success() {
-        bail!("failed to promote target seed");
-    }
+    copy_tree_cow(&src, &dst).context("promote target seed")?;
     Ok(())
 }
 
@@ -188,14 +187,6 @@ pub fn seed_session_target_from_shared(semantic: &SemanticPaths) -> Result<bool>
     if dst.exists() {
         fs::remove_dir_all(&dst)?;
     }
-    let status = Command::new("cp")
-        .args(["-a", "--reflink=auto"])
-        .arg(&src)
-        .arg(&dst)
-        .status()
-        .context("seed session target")?;
-    if !status.success() {
-        bail!("failed to seed session target from shared");
-    }
+    copy_tree_cow(&src, &dst).context("seed session target from shared")?;
     Ok(true)
 }

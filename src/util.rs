@@ -38,3 +38,50 @@ pub fn copy_file(src: &Path, dst: &Path) -> Result<()> {
 pub fn abs_path(p: &Path) -> std::path::PathBuf {
     fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
+
+/// Recursive directory copy with best-effort CoW (`cp --reflink=auto` on Linux,
+/// `cp -c` clonefile on macOS). Falls back to a normal archive copy when the FS
+/// rejects cloning.
+pub fn copy_tree_cow(src: &Path, dst: &Path) -> Result<()> {
+    use std::process::Command;
+
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    #[cfg(target_os = "macos")]
+    let status = Command::new("cp")
+        .args(["-a", "-c"])
+        .arg(src)
+        .arg(dst)
+        .status()
+        .context("cp -ac")?;
+
+    #[cfg(not(target_os = "macos"))]
+    let status = Command::new("cp")
+        .args(["-a", "--reflink=auto"])
+        .arg(src)
+        .arg(dst)
+        .status()
+        .context("cp --reflink=auto")?;
+
+    if status.success() {
+        return Ok(());
+    }
+
+    // Fallback: plain recursive copy (no CoW).
+    let status = Command::new("cp")
+        .arg("-a")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .context("cp -a fallback")?;
+    if !status.success() {
+        anyhow::bail!(
+            "failed to copy tree {} -> {}",
+            src.display(),
+            dst.display()
+        );
+    }
+    Ok(())
+}
