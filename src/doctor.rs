@@ -191,6 +191,42 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         }
     }
 
+    // Host capabilities (informational).
+    {
+        use std::process::Command;
+        let fuse = Command::new("fuse-overlayfs")
+            .arg("--help")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !fuse {
+            issues.push(issue(
+                "warn",
+                "fuse_overlayfs_missing",
+                "fuse-overlayfs not found on PATH; session mounts may fail without kernel OverlayFS"
+                    .into(),
+            ));
+        }
+        let sudo_n = Command::new("sudo")
+            .args(["-n", "true"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !sudo_n {
+            issues.push(issue(
+                "info",
+                "sudo_n_unavailable",
+                "passwordless sudo (-n) unavailable; privileged fuse/overlay mounts will not work in locked-down VMs"
+                    .into(),
+            ));
+        }
+        issues.push(issue(
+            "info",
+            "lazytree_home",
+            format!("LAZYTREE_HOME={}", paths.home.display()),
+        ));
+    }
+
     let ok = !issues.iter().any(|i| i.severity == "error");
     Ok(DoctorReport { ok, issues })
 }
