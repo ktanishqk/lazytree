@@ -143,6 +143,7 @@ pub fn run(cli: Cli) -> Result<()> {
         } => {
             let session = sessions.create(&name, repo.as_deref(), from.as_deref())?;
             if json {
+                let timings = crate::session::take_last_create_timings();
                 let out = serde_json::json!({
                     "id": session.id,
                     "name": session.name,
@@ -151,6 +152,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     "branch": session.branch,
                     "filesystem": session.filesystem,
                     "git": session.git,
+                    "timings": timings,
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {

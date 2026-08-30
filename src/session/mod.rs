@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,6 +14,21 @@ use crate::metadata::{
     atomic_write_json, read_json, FilesystemBackendKind, Paths,
 };
 use crate::repository::RepositoryStore;
+
+thread_local! {
+    static LAST_CREATE_TIMINGS: RefCell<Option<CreateTimings>> = const { RefCell::new(None) };
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateTimings {
+    pub filesystem_ms: u64,
+    pub git_ms: u64,
+    pub total_ms: u64,
+}
+
+pub fn take_last_create_timings() -> Option<CreateTimings> {
+    LAST_CREATE_TIMINGS.with(|t| t.borrow_mut().take())
+}
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -144,6 +160,7 @@ impl SessionStore {
         fs::create_dir_all(session_dir.join("runtime"))?;
 
         let preferred = read_preferred_backend(&self.paths)?;
+        let mount_start = std::time::Instant::now();
         let mounted = filesystem::mount_session(MountRequest {
             lowerdir: Path::new(&repo.base_path),
             upperdir: &upper,
@@ -152,6 +169,7 @@ impl SessionStore {
             preferred,
         })
         .with_context(|| format!("mounting session {name}"))?;
+        let filesystem_ms = mount_start.elapsed().as_millis() as u64;
 
         let base_revision = from
             .unwrap_or(repo.base_commit.as_str())
@@ -159,6 +177,7 @@ impl SessionStore {
         let branch = format!("lazytree/{name}");
         let object_store = PathBuf::from(&repo.object_store);
 
+        let git_start = std::time::Instant::now();
         if let Err(err) = git::setup_session_git(&GitSetup {
             git_dir: git_dir.clone(),
             work_tree: root.clone(),
@@ -170,6 +189,7 @@ impl SessionStore {
             let _ = fs::remove_dir_all(&session_dir);
             return Err(err).context("setting up session git");
         }
+        let git_ms = git_start.elapsed().as_millis() as u64;
 
         let now = Utc::now();
         let session = Session {
@@ -199,6 +219,15 @@ impl SessionStore {
             lifecycle: "ready".into(),
         };
         atomic_write_json(&session_dir.join("metadata.json"), &session)?;
+        // Stash timings on the session object via a side channel isn't ideal;
+        // return through a thread-local for CLI JSON (M4 honesty).
+        LAST_CREATE_TIMINGS.with(|t| {
+            *t.borrow_mut() = Some(CreateTimings {
+                filesystem_ms,
+                git_ms,
+                total_ms: filesystem_ms + git_ms,
+            });
+        });
         Ok(session)
     }
 

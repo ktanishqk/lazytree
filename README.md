@@ -2,7 +2,7 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: Milestone 2 — independent Git state (safety/lifecycle is Milestone 3).
+> Status: Milestone 4 — benchmarks recorded (see `docs/benchmarks.md`). Mixed result: COW files work; Git index often dominates.
 
 ## Idea
 
@@ -38,7 +38,11 @@ lazytree repo remove <repo>
 lazytree create <name>
 lazytree list
 lazytree path <session>
-lazytree destroy <session>
+lazytree status <session> [--json]
+lazytree diff <session>
+lazytree archive <session>
+lazytree doctor [--json]
+lazytree destroy <session> [--force]
 ```
 
 `LAZYTREE_HOME` (default `~/.lazytree`) controls metadata and session storage.
