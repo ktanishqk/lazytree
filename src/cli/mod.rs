@@ -78,6 +78,13 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Run a command in the session root with semantic cache env set
+    Exec {
+        session: String,
+        /// Command and args (use `--` to disambiguate)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -153,6 +160,8 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                     "branch": session.branch,
                     "filesystem": session.filesystem,
                     "git": session.git,
+                    "semantic": session.semantic,
+                    "runtime": session.runtime,
                     "timings": timings,
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
@@ -198,10 +207,13 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                 println!("unexported_commits:   {}", st.unexported_commits);
                 println!("filesystem:           {} ({:?})", st.filesystem_state, st.filesystem_backend);
                 println!("git:                  {}", st.git_state);
+                println!("semantic:             {}", st.semantic_state);
                 println!("runtime:              {}", st.runtime_state);
                 println!("lifecycle:            {}", st.lifecycle);
                 println!("upper_files:          {}", st.upper_files);
                 println!("filesystem_bytes:     {}", st.filesystem_bytes_written);
+                println!("shared_cache:         {}", st.shared_cache);
+                println!("session_cache:        {}", st.session_cache);
                 println!("root:                 {}", st.root);
                 println!("age_seconds:          {}", st.age_seconds);
             }
@@ -237,6 +249,10 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
         Commands::Destroy { session, force } => {
             sessions.destroy(&session, force)?;
             println!("Destroyed session: {session}");
+        }
+        Commands::Exec { session, command } => {
+            let code = sessions.exec(&session, &command)?;
+            return Ok(ExitCode::from(code as u8));
         }
     }
 

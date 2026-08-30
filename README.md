@@ -2,7 +2,7 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: Milestone 4 — benchmarks recorded (see `docs/benchmarks.md`). Mixed result: COW files work; Git index often dominates.
+> Status: M5 semantic cache paths + local `exec`; create hot path optimized (~5–13ms warm).
 
 ## Idea
 
@@ -43,6 +43,7 @@ lazytree diff <session>
 lazytree archive <session>
 lazytree doctor [--json]
 lazytree destroy <session> [--force]
+lazytree exec <session> -- <command>
 ```
 
 `LAZYTREE_HOME` (default `~/.lazytree`) controls metadata and session storage.

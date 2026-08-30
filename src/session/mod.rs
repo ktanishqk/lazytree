@@ -15,6 +15,8 @@ use crate::metadata::{
     Paths,
 };
 use crate::repository::RepositoryStore;
+use crate::runtime::{LocalRuntimeBackend, RuntimeBackend};
+use crate::semantic::SemanticPaths;
 
 thread_local! {
     static LAST_CREATE_TIMINGS: RefCell<Option<CreateTimings>> = const { RefCell::new(None) };
@@ -84,11 +86,14 @@ pub struct SessionStatus {
     pub filesystem_state: String,
     pub filesystem_backend: FilesystemBackendKind,
     pub git_state: String,
+    pub semantic_state: String,
     pub runtime_state: String,
     pub lifecycle: String,
     pub upper_files: u64,
     pub filesystem_bytes_written: u64,
     pub root: String,
+    pub shared_cache: String,
+    pub session_cache: String,
     pub age_seconds: i64,
 }
 
@@ -174,8 +179,12 @@ impl SessionStore {
             fs::create_dir_all(&work)?;
             fs::create_dir_all(&root)?;
             fs::create_dir_all(&git_dir)?;
-            fs::create_dir_all(session_dir.join("semantic").join("writable"))?;
             fs::create_dir_all(session_dir.join("runtime"))?;
+            let semantic = SemanticPaths::for_session(
+                &self.paths.repo_dir(&repo.id),
+                &session_dir,
+            );
+            semantic.ensure()?;
             self.claim_name(name, &id)?;
 
             let cfg = load_config(&self.paths)?;
@@ -326,23 +335,42 @@ impl SessionStore {
 
         let (upper_files, bytes) = dir_stats(&upper)?;
         let age = (Utc::now() - session.created_at).num_seconds();
+        let semantic = self.semantic_paths(&session)?;
 
         Ok(SessionStatus {
-            id: session.id,
-            name: session.name,
-            branch: session.branch,
+            id: session.id.clone(),
+            name: session.name.clone(),
+            branch: session.branch.clone(),
             dirty,
             unexported_commits: unexported,
-            filesystem_state: session.filesystem.state,
+            filesystem_state: session.filesystem.state.clone(),
             filesystem_backend: session.filesystem.backend,
-            git_state: session.git.state,
-            runtime_state: session.runtime.state,
-            lifecycle: session.lifecycle,
+            git_state: session.git.state.clone(),
+            semantic_state: session.semantic.state.clone(),
+            runtime_state: session.runtime.state.clone(),
+            lifecycle: session.lifecycle.clone(),
             upper_files,
             filesystem_bytes_written: bytes,
             root: root.display().to_string(),
+            shared_cache: semantic.shared.display().to_string(),
+            session_cache: semantic.session_writable.display().to_string(),
             age_seconds: age,
         })
+    }
+
+    pub fn semantic_paths(&self, session: &Session) -> Result<SemanticPaths> {
+        let paths = SemanticPaths::for_session(
+            &self.paths.repo_dir(&session.repository_id),
+            Path::new(&session.session_dir),
+        );
+        paths.ensure()?;
+        Ok(paths)
+    }
+
+    pub fn exec(&self, name_or_id: &str, argv: &[String]) -> Result<i32> {
+        let session = self.get(name_or_id)?;
+        let semantic = self.semantic_paths(&session)?;
+        LocalRuntimeBackend.exec(&session, &semantic, argv)
     }
 
     pub fn diff(&self, name_or_id: &str) -> Result<String> {
