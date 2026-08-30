@@ -55,16 +55,20 @@ impl RepositoryStore {
         copy_dir_recursive(&source, &base_path)
             .with_context(|| format!("copying base from {}", source.display()))?;
 
-        // Immutability is enforced by convention in M1: LazyTree never opens the
-        // base for write. chmod a-w breaks fuse-overlayfs copy-up under
-        // default_permissions (design-decisions #10/#11).
+        // Shared object store: use the copied base's object database.
+        // (Dedicated git-objects/ is reserved for later CAS/reflink backends.)
+        let object_store = base_path.join(".git").join("objects");
+        if !object_store.is_dir() {
+            bail!("registered copy is missing .git/objects");
+        }
+
         let repo = Repository {
             version: 1,
             id: id.clone(),
             source_path: source.display().to_string(),
             base_path: base_path.display().to_string(),
             base_commit,
-            object_store: objects.display().to_string(),
+            object_store: object_store.display().to_string(),
             created_at: Utc::now(),
             state: "ready".into(),
         };

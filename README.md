@@ -2,7 +2,7 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: Milestone 1 — filesystem workspace CLI (Git isolation is Milestone 2).
+> Status: Milestone 2 — independent Git state (safety/lifecycle is Milestone 3).
 
 ## Idea
 
@@ -11,7 +11,9 @@ Give each coding agent a normal directory backed by a COW filesystem view instea
 ```bash
 lazytree repo add ~/src/my-repo
 lazytree create ticket-123
+lazytree create experiment --from main
 cd "$(lazytree path ticket-123)"
+git branch --show-current   # lazytree/ticket-123
 ```
 
 ## Prerequisites (Linux)

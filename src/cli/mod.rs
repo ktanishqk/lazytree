@@ -32,6 +32,9 @@ pub enum Commands {
         /// Repository id or source path (defaults to the only registered repo)
         #[arg(long)]
         repo: Option<String>,
+        /// Base revision (commit/branch) for the session branch
+        #[arg(long = "from")]
+        from: Option<String>,
         /// Emit JSON
         #[arg(long)]
         json: bool,
@@ -110,15 +113,22 @@ pub fn run(cli: Cli) -> Result<()> {
                 println!("Removed repository: {repo}");
             }
         },
-        Commands::Create { name, repo, json } => {
-            let session = sessions.create(&name, repo.as_deref())?;
+        Commands::Create {
+            name,
+            repo,
+            from,
+            json,
+        } => {
+            let session = sessions.create(&name, repo.as_deref(), from.as_deref())?;
             if json {
                 let out = serde_json::json!({
                     "id": session.id,
                     "name": session.name,
                     "path": session.root_path(),
                     "repository_id": session.repository_id,
+                    "branch": session.branch,
                     "filesystem": session.filesystem,
+                    "git": session.git,
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::filesystem::{self, MountRequest};
+use crate::git::{self, GitSetup};
 use crate::locking;
 use crate::metadata::{
     atomic_write_json, read_json, FilesystemBackendKind, Paths,
@@ -74,7 +75,12 @@ impl SessionStore {
         Self { paths, repos }
     }
 
-    pub fn create(&self, name: &str, repo_ref: Option<&str>) -> Result<Session> {
+    pub fn create(
+        &self,
+        name: &str,
+        repo_ref: Option<&str>,
+        from: Option<&str>,
+    ) -> Result<Session> {
         validate_name(name)?;
         let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
 
@@ -103,11 +109,12 @@ impl SessionStore {
         let upper = fs_dir.join("upper");
         let work = fs_dir.join("work");
         let root = fs_dir.join("root");
+        let git_dir = session_dir.join("git");
 
         fs::create_dir_all(&upper)?;
         fs::create_dir_all(&work)?;
         fs::create_dir_all(&root)?;
-        fs::create_dir_all(session_dir.join("git"))?;
+        fs::create_dir_all(&git_dir)?;
         fs::create_dir_all(session_dir.join("semantic").join("writable"))?;
         fs::create_dir_all(session_dir.join("runtime"))?;
 
@@ -121,21 +128,38 @@ impl SessionStore {
         })
         .with_context(|| format!("mounting session {name}"))?;
 
+        let base_revision = from
+            .unwrap_or(repo.base_commit.as_str())
+            .to_string();
+        let branch = format!("lazytree/{name}");
+        let object_store = PathBuf::from(&repo.object_store);
+
+        if let Err(err) = git::setup_session_git(&GitSetup {
+            git_dir: git_dir.clone(),
+            work_tree: root.clone(),
+            branch: branch.clone(),
+            base_revision: base_revision.clone(),
+            object_store,
+        }) {
+            let _ = filesystem::umount_path(&root);
+            let _ = fs::remove_dir_all(&session_dir);
+            return Err(err).context("setting up session git");
+        }
+
         let now = Utc::now();
         let session = Session {
             version: 1,
             id: id.clone(),
             name: name.to_string(),
             repository_id: repo.id.clone(),
-            base_revision: repo.base_commit.clone(),
-            branch: format!("lazytree/{name}"),
+            base_revision,
+            branch,
             filesystem: FilesystemMeta {
                 backend: mounted.backend,
                 state: "mounted".into(),
             },
             git: LayerState {
-                // M1: placeholder — independent Git arrives in M2
-                state: "placeholder".into(),
+                state: "ready".into(),
             },
             semantic: LayerState {
                 state: "inherited".into(),

@@ -33,4 +33,10 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D4.** Do not `chmod a-w` the immutable base when using fuse-overlayfs: `default_permissions` then denies writes before copy-up. Immutability is by LazyTree never writing the base.
 - **D5.** Privileged fuse-overlayfs mounts pass `uid`/`gid` of the invoking user plus `allow_other` so agents can write the merged view.
 - **D6.** M1 session `git.state` is `placeholder`; shared lower `.git` is visible but not yet session-private (M2).
+
+## Decisions locked in M2
+
+- **D7.** Session Git uses a private `git_dir` plus `objects/info/alternates` pointing at the registered base object store.
+- **D8.** Lowerdir `.git` is whiteout-removed in the merged view, then replaced with a `gitdir: <abs>` file so tooling discovers Git without `GIT_DIR`.
+- **D9.** Session branch naming: `lazytree/<session-name>` from `--from` or the registered base commit.
 EOF
