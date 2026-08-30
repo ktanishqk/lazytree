@@ -2,41 +2,30 @@
 
 Living document for PRD §37 questions. Updated as evidence lands.
 
-## Milestone 0 answers (partial)
+## Answers (current)
 
 | # | Question | Current answer |
 | --- | --- | --- |
-| 1 | Cost of independent Git state vs OverlayFS mount | **Unknown (M2).** M0 measured filesystem fork only. |
-| 2 | Cheap clone/reflink of Git index | **Not yet investigated.** |
-| 3 | OverlayFS copy-up of unexpectedly large data | **Not yet profiled.** fuse-overlayfs used in M0. |
+| 1 | Cost of independent Git state vs OverlayFS mount | **Git usually dominates.** M4: FS fork ~12ms; Git init often 50–800ms+. |
+| 2 | Cheap clone/reflink of Git index | **Not implemented.** Highest-leverage next experiment — index is ~170KB per 2k-file session. |
+| 3 | OverlayFS copy-up of unexpectedly large data | **Partial:** 64KB file edit → ~65KB upper (expected). Broader profiling TBD. |
 | 4 | File watchers | **Untested.** |
 | 5 | mmap for compilers/tools | **Untested.** |
 | 6 | Inode differences vs build systems | **Untested.** |
-| 7 | Deletion/whiteout vs Git | **Partial:** whiteout delete isolated across sessions; Git interaction deferred to M2. |
+| 7 | Deletion/whiteout vs Git | **Works** for isolation; session `.git` is a gitdir file over whiteout. |
 | 8 | Builds inside merged view | **Untested.** |
-| 9 | Is `git status` dominant startup cost? | **Unknown until M2 timings.** |
-| 10 | Elevated privileges | **Yes in this Cloud VM:** unprivileged FUSE denied; kernel overlay failed; `sudo fuse-overlayfs` works. |
-| 11 | Docker / Cursor cloud breakage | **Observed:** nested overlay + FUSE policy forces privileged fuse-overlayfs. Kernel OverlayFS not usable here. |
-| 12 | macOS changes | **Deferred.** Likely APFS clones or FUSE; not in MVP. |
-| 13 | When LazyTree beats worktree | **See `docs/feasibility-m0.md` + benchmark output.** Filesystem fork already much cheaper than worktree on synthetic repos; full product comparison needs Git state. |
-| 14 | Disk usage lower in practice? | **Promising:** untouched session upperdirs stay tiny vs full worktree trees; quantify in M4. |
-| 15 | Does editor/LSP indexing dominate? | **Unknown.** Out of M0 scope. |
+| 9 | Is `git status` dominant startup cost? | **Often after create**, especially on fuse-overlayfs (M4: up to ~649ms vs ~103ms worktree). |
+| 10 | Elevated privileges | **Yes in this Cloud VM:** sudo fuse-overlayfs required. |
+| 11 | Docker / Cursor cloud breakage | **Observed:** nested overlay + FUSE policy forces privileged fuse-overlayfs. |
+| 12 | macOS changes | **Deferred.** |
+| 13 | When LazyTree beats worktree | **Create:** sometimes on large checkouts; **not** on small/medium in M4. |
+| 14 | Disk usage lower in practice? | **File content: yes. Total session-local: not always** (Git index can dominate). |
+| 15 | Does editor/LSP indexing dominate? | **Unknown.** Still likely the real UX bottleneck for agents. |
 
-## Decisions locked in M0
+## Decisions locked
 
-- **D1.** Keep a `FilesystemBackend` interface; implement `FuseOverlayFs` first for Cloud Agent viability, `KernelOverlayFs` when the host allows.
-- **D2.** Prefer least privilege, but allow an explicit sudo mount helper rather than silently escalating arbitrary commands.
-- **D3.** Do not claim O(1) workspace creation until Git init is measured separately (PRD §30).
-
-## Decisions locked in M1
-
-- **D4.** Do not `chmod a-w` the immutable base when using fuse-overlayfs: `default_permissions` then denies writes before copy-up. Immutability is by LazyTree never writing the base.
-- **D5.** Privileged fuse-overlayfs mounts pass `uid`/`gid` of the invoking user plus `allow_other` so agents can write the merged view.
-- **D6.** M1 session `git.state` is `placeholder`; shared lower `.git` is visible but not yet session-private (M2).
-
-## Decisions locked in M2
-
-- **D7.** Session Git uses a private `git_dir` plus `objects/info/alternates` pointing at the registered base object store.
-- **D8.** Lowerdir `.git` is whiteout-removed in the merged view, then replaced with a `gitdir: <abs>` file so tooling discovers Git without `GIT_DIR`.
-- **D9.** Session branch naming: `lazytree/<session-name>` from `--from` or the registered base commit.
-EOF
+- **D1–D3 (M0):** Backend interface; explicit sudo helper; never claim O(1) without split timings.
+- **D4–D6 (M1):** No chmod a-w on fuse bases; uid/gid on privileged mounts; Git placeholder until M2.
+- **D7–D9 (M2):** Alternates + private gitdir; whiteout lower `.git`; branch `lazytree/<name>`.
+- **D10 (M4):** Prioritize **index inheritance / reflink** before semantic-cache work — M5 in the PRD should wait until create/status are competitive.
+- **D11 (M4):** Treat FUSE `git status` overhead as a first-class risk; prefer kernel OverlayFS where available.
