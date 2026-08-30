@@ -71,10 +71,18 @@ Samples per metric: 5
 
 ### Are we getting the output we wanted?
 
-1. **Create:** Yes — both LazyTree backends stay ~flat (~single-digit ms) while worktree scales with tree size. On medium/large, LazyTree create is typically **~10–40x** faster than worktree; this suite re-checks that for **unionfs** (macOS path) too.
-2. **Overlay model intact on unionfs:** FS fork stays ~1–2 ms across tiny → large → fat. Not clone-tree O(n).
-3. **Status tax:** First `git status` on FUSE (especially unionfs) is slower than worktree — expected. Warm-status / caching remains important for agent UX; create speed is still the parallel-agent win.
-4. **macOS implication:** If unionfs create tracks fuse create on Linux, shipping unionfs on Darwin preserves the product thesis. Re-run this script on a Mac for absolute Darwin ms.
+**Yes on create — that is the product thesis.**
+
+| Signal | Result (this run) |
+| --- | --- |
+| Create scales with tree? | **No for LazyTree** (6–9 ms flat). **Yes for worktree** (18 → 187 → 407 ms). |
+| unionfs (macOS path) ≈ fuse on create? | **Yes** (within 1–2 ms). |
+| FS fork O(1)? | **Yes** — 1–2 ms tiny through large/fat. |
+| vs worktree create (medium / large) | fuse **27x / 58x**; unionfs **23x / 45x**. |
+| First `git status` | LazyTree loses (fuse ~6x, unionfs ~9x vs wt on large) — known FUSE tax; warm-status matters. |
+| Fat content disk | LazyTree upper+meta **~220 KB** vs worktree **~164 MB** for 5 sessions — big win when payloads are large. |
+
+**macOS takeaway:** unionfs preserves the create win vs worktree. Status will be the Darwin risk to measure on a real Mac (`./scripts/bench_full_suite.sh`).
 
 Re-run: `./scripts/bench_full_suite.sh`
 
