@@ -45,10 +45,14 @@ git -C "$ROOT_PATH" config --get core.fsmonitor || echo "(fsmonitor not set — 
 git -C "$ROOT_PATH" config --get core.fsmonitorHookVersion || true
 
 echo "== real git status (1st / 2nd) =="
-/usr/bin/time -p git -C "$ROOT_PATH" status --porcelain 2>&1 | tail -5 || \
-  (TIMEFORMAT='real %R'; time git -C "$ROOT_PATH" status --porcelain)
-/usr/bin/time -p git -C "$ROOT_PATH" status --porcelain 2>&1 | tail -5 || \
-  (TIMEFORMAT='real %R'; time git -C "$ROOT_PATH" status --porcelain)
+if command -v time >/dev/null 2>&1; then
+  TIMEFORMAT='real %R'
+  time git -C "$ROOT_PATH" status --porcelain
+  time git -C "$ROOT_PATH" status --porcelain
+else
+  git -C "$ROOT_PATH" status --porcelain
+  git -C "$ROOT_PATH" status --porcelain
+fi
 
 echo "== edit a file, status should show it =="
 echo '// edited' >> "$ROOT_PATH/src/main.rs"
@@ -56,7 +60,7 @@ git -C "$ROOT_PATH" status --porcelain
 echo "(expect:  M src/main.rs)"
 
 echo "== upperdir should contain the copy-up =="
-UPPER="$(dirname "$(dirname "$ROOT_PATH")")/upper"
+UPPER="$(dirname "$ROOT_PATH")/upper"
 find "$UPPER" -type f 2>/dev/null | head -10 || true
 
 echo ""
