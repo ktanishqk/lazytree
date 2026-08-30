@@ -98,3 +98,6 @@ Samples per metric: 5
 
 Refresh notes vs prior M4 write-up: create P50 dropped from ~23–28ms → ~8–11ms after seed-index + mount-backend remember + zero-spawn happy path.
 
+Parallel create (this VM): 10 sessions in ~42ms wall clock (unlocked mount+git path).
+Registration (5k files, bare-clone objects): ~235ms one-time.
+
