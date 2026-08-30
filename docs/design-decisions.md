@@ -29,3 +29,8 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - **D7–D9 (M2):** Alternates + private gitdir; whiteout lower `.git`; branch `lazytree/<name>`.
 - **D10 (M4):** Prioritize **index inheritance / reflink** before semantic-cache work — M5 in the PRD should wait until create/status are competitive.
 - **D11 (M4):** Treat FUSE `git status` overhead as a first-class risk; prefer kernel OverlayFS where available.
+
+## Index inheritance (post-M4)
+
+- **D12.** Do not put `.git` inside the OverlayFS lowerdir. Registration stores worktree files in `base/` and objects in `git-objects/` separately. Session create only writes a small `gitdir:` file — no whiteout of thousands of git metadata paths (~840ms saved on 5k-file repos).
+- **D13.** Seed sessions by **copying** (`cp --reflink=auto`) a registered `seed/index` when `--from` matches `base_commit`; fall back to `read-tree` otherwise. We *can* just copy the index; the earlier bottleneck was whiteout + misattributed timing, not index semantics.

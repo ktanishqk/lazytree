@@ -22,6 +22,9 @@ pub struct Repository {
     pub base_path: String,
     pub base_commit: String,
     pub object_store: String,
+    /// Prebuilt index matching `base_commit` (copied into sessions).
+    #[serde(default)]
+    pub seed_index: Option<String>,
     pub created_at: DateTime<Utc>,
     pub state: String,
 }
@@ -47,20 +50,43 @@ impl RepositoryStore {
         let repo_dir = self.paths.repo_dir(&id);
         let base_path = repo_dir.join("base");
         let objects = repo_dir.join("git-objects");
+        let seed_dir = repo_dir.join("seed");
 
         fs::create_dir_all(&repo_dir)?;
         fs::create_dir_all(&objects)?;
+        fs::create_dir_all(&seed_dir)?;
 
-        // Initial base copy is allowed to be O(repo size) (PRD §9).
-        copy_dir_recursive(&source, &base_path)
-            .with_context(|| format!("copying base from {}", source.display()))?;
+        // Filesystem lowerdir must NOT include `.git`. Whiteouting a full .git
+        // through OverlayFS/FUSE on every session create was ~O(git files) and
+        // dominated "Git init" timings in M4 (~800ms for 5k-file repos).
+        copy_worktree_excluding_git(&source, &base_path)
+            .with_context(|| format!("copying worktree from {}", source.display()))?;
 
-        // Shared object store: use the copied base's object database.
-        // (Dedicated git-objects/ is reserved for later CAS/reflink backends.)
-        let object_store = base_path.join(".git").join("objects");
-        if !object_store.is_dir() {
-            bail!("registered copy is missing .git/objects");
+        // Shared immutable object store (separate from the COW lowerdir).
+        // dst must receive *contents* of objects/, not a nested objects/objects.
+        {
+            let src_objects = source.join(".git/objects");
+            if objects.exists() {
+                fs::remove_dir_all(&objects)?;
+            }
+            let status = Command::new("cp")
+                .args(["-a"])
+                .arg(&src_objects)
+                .arg(&objects)
+                .status()
+                .context("cp git objects")?;
+            if !status.success() {
+                bail!("failed to copy git objects from {}", src_objects.display());
+            }
         }
+
+        // Seed index: byte-copy into sessions instead of read-tree.
+        let seed_index = seed_dir.join("index");
+        let src_index = source.join(".git/index");
+        if !src_index.is_file() {
+            bail!("source repository has no index; commit before registering");
+        }
+        fs::copy(&src_index, &seed_index).context("copying seed index")?;
 
         let repo = Repository {
             version: 1,
@@ -68,7 +94,8 @@ impl RepositoryStore {
             source_path: source.display().to_string(),
             base_path: base_path.display().to_string(),
             base_commit,
-            object_store: object_store.display().to_string(),
+            object_store: objects.display().to_string(),
+            seed_index: Some(seed_index.display().to_string()),
             created_at: Utc::now(),
             state: "ready".into(),
         };
@@ -180,8 +207,8 @@ fn git_rev_parse(path: &Path, rev: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+#[allow(dead_code)]
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    // Prefer cp -a for speed/metadata; fall back to walk if needed.
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -193,6 +220,30 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         .context("cp -a")?;
     if !status.success() {
         bail!("cp -a failed from {} to {}", src.display(), dst.display());
+    }
+    Ok(())
+}
+
+/// Copy a worktree into `dst`, omitting `.git` so OverlayFS lowerdirs stay
+/// free of Git metadata (session create then only writes a small gitdir file).
+fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    let status = Command::new("cp")
+        .args(["-a"])
+        .arg(format!("{}/.", src.display()))
+        .arg(dst)
+        .status()
+        .context("cp -a worktree")?;
+    if !status.success() {
+        bail!("cp -a worktree failed from {} to {}", src.display(), dst.display());
+    }
+    let embedded_git = dst.join(".git");
+    if embedded_git.exists() {
+        if embedded_git.is_dir() {
+            fs::remove_dir_all(&embedded_git)?;
+        } else {
+            fs::remove_file(&embedded_git)?;
+        }
     }
     Ok(())
 }

@@ -176,6 +176,7 @@ impl SessionStore {
             .to_string();
         let branch = format!("lazytree/{name}");
         let object_store = PathBuf::from(&repo.object_store);
+        let seed_index = repo.seed_index.as_ref().map(PathBuf::from);
 
         let git_start = std::time::Instant::now();
         if let Err(err) = git::setup_session_git(&GitSetup {
@@ -184,6 +185,8 @@ impl SessionStore {
             branch: branch.clone(),
             base_revision: base_revision.clone(),
             object_store,
+            seed_index,
+            seed_commit: Some(repo.base_commit.clone()),
         }) {
             let _ = filesystem::umount_path(&root);
             let _ = fs::remove_dir_all(&session_dir);

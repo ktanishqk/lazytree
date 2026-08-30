@@ -1,4 +1,4 @@
-//! Session-local Git metadata with shared object database (Milestone 2).
+//! Session-local Git metadata with shared object database (Milestone 2+).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,11 @@ pub struct GitSetup {
     pub branch: String,
     pub base_revision: String,
     pub object_store: PathBuf,
+    /// Optional prebuilt index matching `base_revision`'s tree. Copied into the
+    /// session git dir when the resolved commit equals the seed's commit.
+    pub seed_index: Option<PathBuf>,
+    /// Commit OID the seed index was built for (usually the registered base).
+    pub seed_commit: Option<String>,
 }
 
 /// Initialize private Git metadata for a session and point the work tree at it
@@ -22,7 +27,6 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
     fs::create_dir_all(cfg.git_dir.join("objects/info"))?;
     fs::create_dir_all(cfg.git_dir.join("refs/heads"))?;
 
-    // Ensure the shared object store exists.
     if !cfg.object_store.is_dir() {
         bail!(
             "shared object store missing: {}",
@@ -30,11 +34,7 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
         );
     }
 
-    run_git(
-        &cfg.git_dir,
-        None,
-        &["init", "--quiet"],
-    )?;
+    run_git(&cfg.git_dir, None, &["init", "--quiet"])?;
 
     // Share immutable objects with the registered repository.
     let alternates = cfg.git_dir.join("objects/info/alternates");
@@ -42,9 +42,7 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
         .with_context(|| format!("canonicalizing {}", cfg.object_store.display()))?;
     fs::write(&alternates, format!("{}\n", abs_objects.display()))?;
 
-    // Resolve base revision through the shared object store.
     let base = resolve_commit(&cfg.git_dir, &cfg.base_revision)?;
-    let tree = rev_parse(&cfg.git_dir, &format!("{base}^{{tree}}"))?;
 
     run_git(
         &cfg.git_dir,
@@ -56,12 +54,29 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
         None,
         &["symbolic-ref", "HEAD", &format!("refs/heads/{}", cfg.branch)],
     )?;
-    run_git(&cfg.git_dir, None, &["read-tree", &tree])?;
 
-    // Mask lowerdir `.git` (directory) then install gitdir indirection.
+    // Prefer copying a seed index (O(index bytes)) over read-tree (tree walk).
+    // Fall back when --from points at a different revision than the seed.
+    let can_copy_seed = match (&cfg.seed_index, &cfg.seed_commit) {
+        (Some(idx), Some(seed)) if idx.is_file() => seed == &base || seed_matches_short(seed, &base),
+        _ => false,
+    };
+
+    if can_copy_seed {
+        let src = cfg.seed_index.as_ref().unwrap();
+        let dst = cfg.git_dir.join("index");
+        copy_index(src, &dst)?;
+    } else {
+        let tree = rev_parse(&cfg.git_dir, &format!("{base}^{{tree}}"))?;
+        run_git(&cfg.git_dir, None, &["read-tree", &tree])?;
+    }
+
+    // Lowerdir should not contain `.git` (see repo registration). Just write
+    // the gitdir pointer — no OverlayFS whiteout of thousands of git files.
     let overlay_git = cfg.work_tree.join(".git");
     if overlay_git.exists() {
         if overlay_git.is_dir() {
+            // Legacy bases that still embed .git: whiteout (slow) as fallback.
             fs::remove_dir_all(&overlay_git)
                 .with_context(|| format!("whiteout {}", overlay_git.display()))?;
         } else {
@@ -74,7 +89,6 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
     fs::write(&overlay_git, format!("gitdir: {}\n", abs_git.display()))
         .with_context(|| format!("writing {}", overlay_git.display()))?;
 
-    // Disable bare; work tree is discovered via the `.git` file.
     run_git(&cfg.git_dir, None, &["config", "core.bare", "false"])?;
     run_git(
         &cfg.git_dir,
@@ -86,6 +100,27 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
         ],
     )?;
 
+    Ok(())
+}
+
+fn seed_matches_short(seed: &str, base: &str) -> bool {
+    seed.starts_with(base) || base.starts_with(seed)
+}
+
+fn copy_index(src: &Path, dst: &Path) -> Result<()> {
+    // Prefer reflink when the filesystem supports it (cheap CoW of the index file).
+    let status = Command::new("cp")
+        .args(["--reflink=auto", "--remove-destination"])
+        .arg(src)
+        .arg(dst)
+        .status();
+    if let Ok(s) = status {
+        if s.success() {
+            return Ok(());
+        }
+    }
+    fs::copy(src, dst)
+        .with_context(|| format!("copying index {} -> {}", src.display(), dst.display()))?;
     Ok(())
 }
 
@@ -140,10 +175,4 @@ fn run_git(git_dir: &Path, work_tree: Option<&Path>, args: &[&str]) -> Result<Ou
         );
     }
     Ok(out)
-}
-
-/// Shared object store path for a registered repository base checkout.
-#[allow(dead_code)]
-pub fn object_store_from_base(base_path: &Path) -> PathBuf {
-    base_path.join(".git").join("objects")
 }
