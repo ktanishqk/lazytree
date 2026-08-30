@@ -43,5 +43,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - Kernel OverlayFS path when unprivileged mounts work (drop sudo fuse).
 - Optional sync create `--warm-status` for CI that needs immediate status numbers.
 - npm binary download in postinstall (currently PATH/LAZYTREE_BIN only).
-- macOS: measure create/status vs Linux fuse; optional APFS `clonefile` only for unionfs copy-up.
+- macOS: measure create/status vs Linux fuse on real Darwin (`./scripts/bench_backends.sh`); optional APFS `clonefile` only for unionfs copy-up.
 - Windows: not in scope (WSL2 or experimental WinFsp later).
+
+Proxy bench (Linux unionfs = macOS plugin path): `docs/benchmarks-macos-proxy.md`.

@@ -94,7 +94,7 @@ cd npm && npm link   # requires native binary on PATH or LAZYTREE_BIN
 
 See `docs/canonical-cache.md`, `docs/feasibility-m0.md`, `docs/cursor-integration.md` and `docs/design-decisions.md`.
 
-Validate: `./scripts/smoke.sh`
+Validate: `./scripts/smoke.sh` · backend compare: `./scripts/bench_backends.sh` (macOS plugin proxy on Linux; native on Darwin).
 
 ## License
 
