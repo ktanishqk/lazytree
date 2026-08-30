@@ -132,6 +132,64 @@ pub fn write_session_mapping(
     Ok(path)
 }
 
+pub fn list_session_mappings(project: &Path) -> Result<Vec<serde_json::Value>> {
+    let dir = project.join(".cursor/lazytree-sessions");
+    let mut out = Vec::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    let mut entries: Vec<_> = fs::read_dir(&dir)?.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = fs::read_to_string(&p)
+            .with_context(|| format!("reading {}", p.display()))?;
+        let mut v: serde_json::Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing {}", p.display()))?;
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "mapping_path".into(),
+                serde_json::Value::String(p.display().to_string()),
+            );
+            if let Some(root) = obj.get("root").and_then(|x| x.as_str()) {
+                obj.insert(
+                    "root_exists".into(),
+                    serde_json::Value::Bool(Path::new(root).is_dir()),
+                );
+            }
+        }
+        out.push(v);
+    }
+    Ok(out)
+}
+
+pub fn get_session_mapping(project: &Path, session_id: &str) -> Result<serde_json::Value> {
+    let path = project
+        .join(".cursor/lazytree-sessions")
+        .join(format!("{session_id}.json"));
+    if !path.is_file() {
+        bail!("no Cursor mapping for session id {session_id} under {}", project.display());
+    }
+    let raw = fs::read_to_string(&path)?;
+    let mut v: serde_json::Value = serde_json::from_str(&raw)?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "mapping_path".into(),
+            serde_json::Value::String(path.display().to_string()),
+        );
+        if let Some(root) = obj.get("root").and_then(|x| x.as_str()) {
+            obj.insert(
+                "root_exists".into(),
+                serde_json::Value::Bool(Path::new(root).is_dir()),
+            );
+        }
+    }
+    Ok(v)
+}
+
 /// Locate the directory that ships `.cursor/` assets (dev tree or next to binary).
 pub fn find_bundled_assets() -> Result<PathBuf> {
     if let Ok(override_path) = std::env::var("LAZYTREE_CURSOR_ASSETS") {

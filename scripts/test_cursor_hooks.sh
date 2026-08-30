@@ -128,6 +128,13 @@ echo "$BOOT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "root
 test -f "$WORK_DIR/.cursor/lazytree-sessions/boot-sid.json"
 echo "cursor bootstrap OK"
 
+# --- cursor status sees bootstrap mapping ---
+STATUS_ONE=$("$BIN" cursor status boot-sid --project "$WORK_DIR" --json)
+echo "$STATUS_ONE" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("session_id")=="boot-sid"; assert d.get("root_exists") is True; assert "root" in d and "branch" in d'
+STATUS_LIST=$("$BIN" cursor status --project "$WORK_DIR" --json)
+echo "$STATUS_LIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list); ids={x.get("session_id") for x in d}; assert "boot-sid" in ids and "agent-test-1" in ids'
+echo "cursor status OK"
+
 # --- doctor cursor info (from LazyTree checkout) ---
 (cd "$ROOT" && "$BIN" doctor --json) | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "issues" in d'
 echo "doctor OK"

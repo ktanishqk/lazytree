@@ -9,7 +9,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 | 1 | Cost of independent Git state vs OverlayFS mount | **FS + seed-index dominate create** (~4ms + ~1ms). Git process spawn path avoided on happy path. |
 | 2 | Cheap clone/reflink of Git index | **Done (D13):** copy `seed/index`; reflink when FS supports it (nested cloud often does not). |
 | 3 | OverlayFS copy-up of unexpectedly large data | **Partial:** 64KB file edit → ~65KB upper (expected). Broader profiling TBD. |
-| 4 | File watchers | **Untested.** |
+| 4 | File watchers | **Works on fuse-overlayfs session root:** `inotifywait` saw `MODIFY` on overwrite and `CREATE` for a new file (Cloud VM probe, 2026-08-30). |
 | 5 | mmap for compilers/tools | **Canonical exec** helps path-sensitive caches (Cargo). mmap identity across sessions still TBD. |
 | 6 | Inode differences vs build systems | **Mitigated for Cargo** via bind-mount to stable canonical paths in `lazytree exec`. |
 | 7 | Deletion/whiteout vs Git | **Works;** `.git` is never in lowerdir — session only writes a `gitdir:` file. |

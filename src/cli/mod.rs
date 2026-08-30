@@ -147,6 +147,16 @@ pub enum CursorCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show Cursor mapping for a session id (or list mappings in a project)
+    Status {
+        /// Conversation/session id (optional; lists all when omitted)
+        session_id: Option<String>,
+        /// Project directory with `.cursor/lazytree-sessions/`
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -438,6 +448,50 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                         map_path.display(),
                         session.branch
                     );
+                }
+            }
+            CursorCommands::Status {
+                session_id,
+                project,
+                json,
+            } => {
+                let project = project
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                if let Some(session_id) = session_id {
+                    let v = crate::cursor_integration::get_session_mapping(&project, &session_id)?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&v)?);
+                    } else {
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            v.get("session_id").and_then(|x| x.as_str()).unwrap_or(""),
+                            v.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                            v.get("branch").and_then(|x| x.as_str()).unwrap_or(""),
+                            v.get("root").and_then(|x| x.as_str()).unwrap_or(""),
+                        );
+                    }
+                } else {
+                    let list = crate::cursor_integration::list_session_mappings(&project)?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&list)?);
+                    } else if list.is_empty() {
+                        println!("(no Cursor LazyTree mappings)");
+                    } else {
+                        for v in list {
+                            let alive = v
+                                .get("root_exists")
+                                .and_then(|x| x.as_bool())
+                                .unwrap_or(false);
+                            println!(
+                                "{}\t{}\t{}\t{}{}",
+                                v.get("session_id").and_then(|x| x.as_str()).unwrap_or(""),
+                                v.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                                v.get("branch").and_then(|x| x.as_str()).unwrap_or(""),
+                                v.get("root").and_then(|x| x.as_str()).unwrap_or(""),
+                                if alive { "" } else { "\tSTALE" },
+                            );
+                        }
+                    }
                 }
             }
         },
