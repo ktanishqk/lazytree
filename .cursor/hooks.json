@@ -15,7 +15,7 @@
     "beforeShellExecution": [
       {
         "command": ".cursor/hooks/lazytree-shell-gate.sh",
-        "matcher": "git\\s+(commit|push)"
+        "matcher": "git\\s"
       }
     ]
   }

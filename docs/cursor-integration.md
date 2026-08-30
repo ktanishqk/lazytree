@@ -35,7 +35,8 @@ It does **not** rebind Cursor’s workspace folder.
 If a mapping exists for this chat:
 
 - Mutating file tools with an explicit path outside `LAZYTREE_ROOT` → **deny**
-- `git commit` / `git push` clearly aimed at the primary checkout → **deny**
+- Risky `git` outside the root (`commit`/`push`/`merge`/`rebase`/`reset`/`clean`/`stash`/`tag`/`worktree`, mutating `branch`) → **deny**
+- Read-only `git status` / `git branch -vv` outside root → **allow** (informational)
 
 If no mapping → fail-open (normal Cursor behavior).
 

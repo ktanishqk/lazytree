@@ -103,11 +103,33 @@ printf '%s\n' "{\"session_id\":\"agent-test-1\",\"command\":\"git -C $ROOT_PATH 
   | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("permission")=="allow"'
 echo "shell allow -C OK"
 
+# --- shell deny worktree outside ---
+printf '%s\n' '{"session_id":"agent-test-1","command":"git worktree add /tmp/wt main","cwd":"/tmp"}' \
+  | LAZYTREE_ROOT="$ROOT_PATH" bash "$WORK_DIR/.cursor/hooks/lazytree-shell-gate.sh" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("permission")=="deny"'
+echo "shell deny worktree OK"
+
+# --- shell allow branch list ---
+printf '%s\n' '{"session_id":"agent-test-1","command":"git branch -vv","cwd":"/tmp"}' \
+  | LAZYTREE_ROOT="$ROOT_PATH" bash "$WORK_DIR/.cursor/hooks/lazytree-shell-gate.sh" \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("permission")=="allow"'
+echo "shell allow branch list OK"
+
 # --- cursor open --json / dry-run ---
 NAME=$(python3 -c 'import json; print(json.load(open("'"$WORK_DIR"'/.cursor/lazytree-sessions/agent-test-1.json"))["name"])')
 OPEN=$("$BIN" cursor open "$NAME" --json)
 echo "$OPEN" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "root" in d and "branch" in d'
 "$BIN" cursor open "$NAME" --dry-run | grep -q "$ROOT_PATH"
 echo "cursor open OK"
+
+# --- cursor bootstrap ---
+BOOT=$("$BIN" cursor bootstrap boot-test --session-id boot-sid --project "$WORK_DIR" --json)
+echo "$BOOT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "root" in d and "mapping" in d'
+test -f "$WORK_DIR/.cursor/lazytree-sessions/boot-sid.json"
+echo "cursor bootstrap OK"
+
+# --- doctor cursor info (from LazyTree checkout) ---
+(cd "$ROOT" && "$BIN" doctor --json) | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "issues" in d'
+echo "doctor OK"
 
 echo "ALL CURSOR HOOK TESTS PASSED"

@@ -128,6 +128,69 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         }
     }
 
+    // Cursor soft-integration health (advisory; cwd may not be a project).
+    if let Ok(cwd) = std::env::current_dir() {
+        let hooks = cwd.join(".cursor/hooks.json");
+        if hooks.is_file() {
+            match fs::read_to_string(&hooks) {
+                Ok(text) if text.contains("lazytree-session-start") => {}
+                Ok(_) => issues.push(issue(
+                    "info",
+                    "cursor_hooks_unrelated",
+                    format!(
+                        ".cursor/hooks.json exists but does not reference LazyTree hooks ({})",
+                        hooks.display()
+                    ),
+                )),
+                Err(e) => issues.push(issue(
+                    "warn",
+                    "cursor_hooks_unreadable",
+                    format!("cannot read {}: {e}", hooks.display()),
+                )),
+            }
+            let skill = cwd.join(".cursor/skills/lazytree-session/SKILL.md");
+            if !skill.is_file() {
+                issues.push(issue(
+                    "info",
+                    "cursor_skill_missing",
+                    "LazyTree hooks present but skill .cursor/skills/lazytree-session/SKILL.md is missing"
+                        .into(),
+                ));
+            }
+        }
+        let maps = cwd.join(".cursor/lazytree-sessions");
+        if maps.is_dir() {
+            let mut stale = 0usize;
+            if let Ok(rd) = fs::read_dir(&maps) {
+                for entry in rd.flatten() {
+                    let p = entry.path();
+                    if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+                    if let Ok(raw) = fs::read_to_string(&p) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            if let Some(root) = v.get("root").and_then(|x| x.as_str()) {
+                                if !PathBuf::from(root).is_dir() {
+                                    stale += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if stale > 0 {
+                issues.push(issue(
+                    "warn",
+                    "cursor_stale_mappings",
+                    format!(
+                        "{stale} Cursor LazyTree mapping(s) under {} point at missing roots",
+                        maps.display()
+                    ),
+                ));
+            }
+        }
+    }
+
     let ok = !issues.iter().any(|i| i.severity == "error");
     Ok(DoctorReport { ok, issues })
 }

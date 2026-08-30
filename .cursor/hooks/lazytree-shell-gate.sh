@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# beforeShellExecution: deny git commit/push outside LazyTree root when paired.
+# beforeShellExecution: deny risky git outside LazyTree root when paired.
 set -euo pipefail
 
 INPUT=$(cat || true)
@@ -33,33 +33,82 @@ cwd = d.get("working_directory") or d.get("cwd") or ""
 def under(root, path):
     if not path:
         return False
-    rp = os.path.realpath(path)
+    try:
+        rp = os.path.realpath(path)
+    except Exception:
+        return False
     return rp == root or rp.startswith(root + os.sep)
 
-dangerous = False
 try:
     parts = shlex.split(cmd)
 except Exception:
     parts = cmd.split()
 
-if parts and parts[0] == "git" and ("commit" in parts or "push" in parts):
-    if "-C" in parts:
-        i = parts.index("-C")
-        target = parts[i + 1] if i + 1 < len(parts) else ""
-        if not under(root, target):
+while parts and "=" in parts[0] and not parts[0].startswith("-"):
+    parts = parts[1:]
+
+BLOCK = {
+    "commit", "push", "merge", "rebase", "cherry-pick", "am",
+    "reset", "clean", "stash", "tag", "worktree",
+}
+
+dangerous = False
+reason = "git write"
+
+if parts and parts[0] == "git":
+    sub = None
+    i = 1
+    target_c = None
+    while i < len(parts):
+        p = parts[i]
+        if p == "-C" and i + 1 < len(parts):
+            target_c = parts[i + 1]
+            i += 2
+            continue
+        if p in ("-c", "--git-dir", "--work-tree", "--namespace") and i + 1 < len(parts):
+            i += 2
+            continue
+        if p.startswith("-"):
+            i += 1
+            continue
+        sub = p
+        break
+
+    rest = parts[i + 1 :] if sub else []
+
+    # Mutating branch ops (create/delete/rename), not listing.
+    branch_mutate = False
+    if sub == "branch":
+        flags = {
+            "-d", "-D", "-m", "-M", "-c", "-C",
+            "--delete", "--move", "--copy", "--unset-upstream",
+        }
+        if any(x in flags or x.startswith("--delete") or x.startswith("--move") for x in rest):
+            branch_mutate = True
+        elif any(not x.startswith("-") for x in rest):
+            branch_mutate = True  # git branch newname
+
+    blocked = (sub in BLOCK) or branch_mutate
+    if blocked:
+        label = sub or "branch"
+        if target_c is not None:
+            if not under(root, target_c):
+                dangerous = True
+                reason = f"git {label}"
+        elif cwd and not under(root, cwd):
             dangerous = True
-    elif cwd and not under(root, cwd):
-        dangerous = True
-    elif not cwd:
-        dangerous = True
+            reason = f"git {label}"
+        elif not cwd:
+            dangerous = True
+            reason = f"git {label}"
 
 if dangerous:
     print(json.dumps({
         "permission": "deny",
-        "userMessage": f"LazyTree gate: git commit/push must run inside {root}",
+        "userMessage": f"LazyTree gate: {reason} must run inside {root}",
         "agentMessage": (
-            f"Run git -C {root} ... or cd to LAZYTREE_ROOT before commit/push. "
-            f"Primary checkout edits are out of policy for this session."
+            f"Run git -C {root} ... or set working_directory to LAZYTREE_ROOT. "
+            f"Primary checkout mutations are out of policy for this session."
         ),
     }))
 else:
