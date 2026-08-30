@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::git;
 use crate::locking;
 use crate::metadata::{atomic_write_json, read_json, Paths};
 use crate::util::{shell_quote, short_id};
@@ -212,24 +213,9 @@ impl RepositoryStore {
 }
 
 fn ensure_clean_git_repo(path: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(["-C"])
-        .arg(path)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .context("git rev-parse")?;
-    if !status.status.success() {
-        bail!("{} is not a git repository", path.display());
-    }
-    let porcelain = Command::new("git")
-        .args(["-C"])
-        .arg(path)
-        .args(["status", "--porcelain"])
-        .output()
-        .context("git status")?;
-    if !porcelain.status.success() {
-        bail!("git status failed in {}", path.display());
-    }
+    git::git_c(path, &["rev-parse", "--is-inside-work-tree"])
+        .with_context(|| format!("{} is not a git repository", path.display()))?;
+    let porcelain = git::git_c(path, &["status", "--porcelain"])?;
     if !porcelain.stdout.is_empty() {
         bail!("repository contains uncommitted changes; commit/stash them before registering");
     }
@@ -237,28 +223,12 @@ fn ensure_clean_git_repo(path: &Path) -> Result<()> {
 }
 
 fn git_rev_parse(path: &Path, rev: &str) -> Result<String> {
-    let out = Command::new("git")
-        .args(["-C"])
-        .arg(path)
-        .args(["rev-parse", rev])
-        .output()
-        .context("git rev-parse")?;
-    if !out.status.success() {
-        bail!("git rev-parse {rev} failed");
-    }
+    let out = git::git_c(path, &["rev-parse", rev])?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn git_config_get(repo: &Path, key: &str) -> Option<String> {
-    let out = Command::new("git")
-        .args(["-C"])
-        .arg(repo)
-        .args(["config", "--get", key])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
+    let out = git::git_c(repo, &["config", "--get", key]).ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if s.is_empty() {
         None

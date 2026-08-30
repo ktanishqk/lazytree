@@ -1,85 +1,24 @@
 //! Milestone 3 lifecycle: dirty destroy protection, status, archive, doctor.
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
-fn lazytree_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_lazytree"))
-}
-
-fn run_lt(home: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(lazytree_bin())
-        .env("LAZYTREE_HOME", home)
-        .args(args)
-        .output()
-        .expect("run lazytree")
-}
-
-fn assert_ok(out: &std::process::Output, ctx: &str) {
-    if !out.status.success() {
-        panic!(
-            "{ctx} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-}
-
-fn assert_err(out: &std::process::Output, ctx: &str) {
-    if out.status.success() {
-        panic!("{ctx} unexpectedly succeeded");
-    }
-}
-
-fn make_repo(path: &Path) {
-    fs::create_dir_all(path).unwrap();
-    fs::write(path.join("foo.txt"), b"original\n").unwrap();
-    assert!(Command::new("git")
-        .args(["init"])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["config", "user.email", "test@lazytree.dev"])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["config", "user.name", "test"])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-    // Allow receiving pushes into non-bare checkout for archive tests.
-    assert!(Command::new("git")
-        .args(["config", "receive.denyCurrentBranch", "updateInstead"])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["add", "."])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["commit", "-m", "base"])
-        .current_dir(path)
-        .status()
-        .unwrap()
-        .success());
-}
+#[path = "common/mod.rs"]
+mod common;
+use common::*;
 
 #[test]
 fn dirty_destroy_archive_status_doctor() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("lt-home");
     let repo = tmp.path().join("repo");
-    make_repo(&repo);
+    make_repo(
+        &repo,
+        RepoOpts {
+            allow_push_to_checkout: true,
+            ..RepoOpts::default()
+        },
+    );
 
     assert_ok(
         &run_lt(&home, &["repo", "add", repo.to_str().unwrap()]),
@@ -89,7 +28,6 @@ fn dirty_destroy_archive_status_doctor() {
     assert_ok(&out, "create");
     let root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
 
-    // dirty destroy refused
     fs::write(root.join("foo.txt"), b"dirty\n").unwrap();
     assert_err(&run_lt(&home, &["destroy", "eng-1"]), "destroy dirty");
 
@@ -102,7 +40,6 @@ fn dirty_destroy_archive_status_doctor() {
     assert_ok(&diff, "diff");
     assert!(String::from_utf8_lossy(&diff.stdout).contains("dirty"));
 
-    // commit then destroy still refused (unexported)
     assert!(Command::new("git")
         .args(["-C"])
         .arg(&root)
@@ -131,7 +68,6 @@ fn dirty_destroy_archive_status_doctor() {
     );
 
     assert_ok(&run_lt(&home, &["archive", "eng-1"]), "archive");
-    // branch published
     let branches = Command::new("git")
         .args(["-C"])
         .arg(&repo)
@@ -146,7 +82,6 @@ fn dirty_destroy_archive_status_doctor() {
 
     assert_ok(&run_lt(&home, &["destroy", "eng-1"]), "destroy archived");
 
-    // force destroy path
     let out = run_lt(&home, &["create", "eng-2"]);
     assert_ok(&out, "create 2");
     let root2 = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
@@ -156,6 +91,5 @@ fn dirty_destroy_archive_status_doctor() {
         "force destroy",
     );
 
-    let doc = run_lt(&home, &["doctor", "--json"]);
-    assert_ok(&doc, "doctor");
+    assert_ok(&run_lt(&home, &["doctor", "--json"]), "doctor");
 }

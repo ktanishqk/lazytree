@@ -4,28 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-fn lazytree_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_lazytree"))
-}
-
-fn run_lt(home: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(lazytree_bin())
-        .env("LAZYTREE_HOME", home)
-        .args(args)
-        .output()
-        .expect("run lazytree")
-}
-
-fn assert_ok(out: &std::process::Output, ctx: &str) {
-    if !out.status.success() {
-        panic!(
-            "{ctx} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-}
+#[path = "common/mod.rs"]
+mod common;
+use common::*;
 
 fn make_rust_repo(path: &Path) {
     fs::create_dir_all(path).unwrap();
@@ -36,8 +17,6 @@ fn make_rust_repo(path: &Path) {
         .unwrap()
         .success());
     let app = path.join("app");
-    // Move app contents up so repo root is the crate (simpler for lazytree)
-    // Actually register app/ as the repo.
     assert!(Command::new("git")
         .args(["init"])
         .current_dir(&app)
@@ -85,25 +64,21 @@ fn canonical_exec_reuses_cargo_target_across_sessions() {
     assert_ok(&run_lt(&home, &["create", "a"]), "create a");
     assert_ok(&run_lt(&home, &["create", "b"]), "create b");
 
-    // Cold check in session A (canonical)
     let t0 = Instant::now();
-    let out = run_lt(
-        &home,
-        &["exec", "a", "--", "cargo", "check", "-q"],
+    assert_ok(
+        &run_lt(&home, &["exec", "a", "--", "cargo", "check", "-q"]),
+        "cargo check a cold",
     );
-    assert_ok(&out, "cargo check a cold");
     let cold_ms = t0.elapsed().as_millis();
 
     assert_ok(&run_lt(&home, &["cache", "promote", "a"]), "promote");
     assert_ok(&run_lt(&home, &["cache", "seed", "b"]), "seed b");
 
-    // Warm check in session B should be much faster than cold.
     let t1 = Instant::now();
-    let out = run_lt(
-        &home,
-        &["exec", "b", "--", "cargo", "check", "-q"],
+    assert_ok(
+        &run_lt(&home, &["exec", "b", "--", "cargo", "check", "-q"]),
+        "cargo check b warm",
     );
-    assert_ok(&out, "cargo check b warm");
     let warm_ms = t1.elapsed().as_millis();
 
     eprintln!("cold_ms={cold_ms} warm_ms={warm_ms}");

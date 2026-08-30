@@ -4,72 +4,28 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 
-fn lazytree_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_lazytree"))
-}
-
-fn run_lt(home: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(lazytree_bin())
-        .env("LAZYTREE_HOME", home)
-        .args(args)
-        .output()
-        .expect("run lazytree")
-}
-
-fn assert_ok(out: &std::process::Output, ctx: &str) {
-    if !out.status.success() {
-        panic!(
-            "{ctx} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-}
-
-fn init_repo(repo: &std::path::Path) {
-    fs::create_dir_all(repo).unwrap();
-    fs::write(repo.join("README.md"), b"base\n").unwrap();
-    assert!(Command::new("git")
-        .args(["init", "-b", "main"])
-        .current_dir(repo)
-        .status()
-        .unwrap()
-        .success());
-    for (k, v) in [
-        ("user.email", "test@lazytree.dev"),
-        ("user.name", "test"),
-    ] {
-        assert!(Command::new("git")
-            .args(["config", k, v])
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success());
-    }
-    assert!(Command::new("git")
-        .args(["add", "."])
-        .current_dir(repo)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["commit", "-m", "base"])
-        .current_dir(repo)
-        .status()
-        .unwrap()
-        .success());
-}
+#[path = "common/mod.rs"]
+mod common;
+use common::*;
 
 #[test]
 fn parallel_create_and_archive_publish() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("lt-home");
     let repo = tmp.path().join("repo");
-    init_repo(&repo);
+    make_repo(
+        &repo,
+        RepoOpts {
+            files: &[("README.md", b"base\n")],
+            allow_push_to_checkout: true,
+            ..RepoOpts::default()
+        },
+    );
 
-    let out = run_lt(&home, &["repo", "add", repo.to_str().unwrap()]);
-    assert_ok(&out, "repo add");
+    assert_ok(
+        &run_lt(&home, &["repo", "add", repo.to_str().unwrap()]),
+        "repo add",
+    );
 
     let home_s = home.clone();
     let handles: Vec<_> = (0..8)
@@ -87,7 +43,6 @@ fn parallel_create_and_archive_publish() {
     let roots: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
     assert_eq!(roots.len(), 8);
 
-    // Isolation: write unique files.
     for (i, root) in roots.iter().enumerate() {
         fs::write(PathBuf::from(root).join(format!("only-{i}.txt")), b"x\n").unwrap();
     }
@@ -102,8 +57,6 @@ fn parallel_create_and_archive_publish() {
         }
     }
 
-    // Commit in one session and archive → branch appears on source.
-    // Identity is inherited from the registered source repo into session git config.
     let root0 = &roots[0];
     assert!(Command::new("git")
         .args(["-C", root0, "add", "only-0.txt"])
@@ -116,21 +69,18 @@ fn parallel_create_and_archive_publish() {
         .unwrap()
         .success());
 
-    let out = run_lt(&home, &["archive", "par0"]);
-    assert_ok(&out, "archive par0");
+    assert_ok(&run_lt(&home, &["archive", "par0"]), "archive par0");
 
     let branches = Command::new("git")
         .args(["-C", repo.to_str().unwrap(), "branch", "--list", "lazytree/par0"])
         .output()
         .unwrap();
     assert_ok(&branches, "list published branch");
-    let text = String::from_utf8_lossy(&branches.stdout);
     assert!(
-        text.contains("lazytree/par0"),
-        "expected published branch, got: {text}"
+        String::from_utf8_lossy(&branches.stdout).contains("lazytree/par0"),
+        "expected published branch"
     );
 
-    // cursor bootstrap writes mapping
     let project = tmp.path().join("project");
     fs::create_dir_all(&project).unwrap();
     let out = run_lt(
@@ -147,6 +97,7 @@ fn parallel_create_and_archive_publish() {
         ],
     );
     assert_ok(&out, "cursor bootstrap");
-    let map = project.join(".cursor/lazytree-sessions/conv-1.json");
-    assert!(map.is_file(), "mapping missing");
+    assert!(project
+        .join(".cursor/lazytree-sessions/conv-1.json")
+        .is_file());
 }
