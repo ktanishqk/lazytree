@@ -24,15 +24,34 @@ Hook contract:
 1. Args: `2 <last_token>`
 2.Stdout: `<new_token>\0` then NUL-separated paths relative to worktree
 3. Inclusive: list every upper path that *may* have changed (files, dirs, whiteout targets)
-4. Empty upper → token only (no paths) — Git skips full-tree walk
+4. Empty upper → token only (no paths) — Git skips full-tree walk **once the index already has an fsmonitor last-update token**
 5. Unknown/stale token → may return `/` once (trivial = full scan) then resume
 
 Git keeps real `git status` semantics; agents need no teaching.
 
+## Spike results (2026-08-30, 5k files, fuse-overlayfs VM)
+
+| Mode | `git status` |
+| --- | ---: |
+| LazyTree **1st** status (no fsmonitor) | ~176 ms |
+| LazyTree **1st** status (fsmonitor on, empty upper) | ~160 ms |
+| LazyTree **2nd** status (no fsmonitor) | ~13 ms |
+| LazyTree **2nd** status (fsmonitor) | ~16 ms |
+| LazyTree after 1 edit (fsmonitor) | ~9 ms (correct ` M …`) |
+| git worktree 1st | ~26 ms |
+
+### What this means
+
+1. **You cannot avoid agents calling `git status`.** Teach / `lazytree status` / deny-hooks are brittle.
+2. **Fsmonitor does not fix the first status by itself** if the index has no FSMO last-update token — Git full-scans once to establish baseline (same cold FUSE tax).
+3. **Background warm-status after create** *is* that priming scan. Keep it.
+4. **Fsmonitor’s real job:** after priming, keep subsequent `git status` correct and O(upper delta), including when page cache is cold.
+5. **Stretch:** seed the index FSMO extension at session create so the *first* client `git status` can trust empty upper and skip the tree walk.
+
 ## Non-goals (for this experiment)
 
-- Fake porcelain via `lazytree status` as the primary UX
-- PATH-wrapping `git` (optional later; flag compatibility risk)
+- Fake porcelain via `lazytree status` as the primary UX (optional debug helper later)
+- PATH-wrapping `git` (optional; flag-compatibility risk)
 - Replacing builtin `fsmonitor--daemon` IPC (hook is enough to prove the thesis)
 
 ## Edge cases to validate
@@ -49,8 +68,9 @@ Git keeps real `git status` semantics; agents need no teaching.
 
 ## Success metric
 
-On medium/large fixtures, **first and repeat `git status`** with LazyTree+fsmonitor should approach worktree order of magnitude (or at least crush today’s cold FUSE numbers), while create stays ~O(1).
+- **Near-term:** primed + fsmonitor → repeat status ~10 ms and correct under edits.
+- **Stretch:** seed FSMO at create → **first** `git status` also O(delta), approaching worktree cold.
 
 ## Spike entry
 
-`./scripts/spike_fsmonitor_upper.sh` (when added) — create session, walk upper into hook, compare status ms with/without `core.fsmonitor`.
+`./scripts/spike_fsmonitor_upper.sh`
