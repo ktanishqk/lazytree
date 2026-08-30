@@ -367,10 +367,32 @@ impl SessionStore {
         Ok(paths)
     }
 
+    #[allow(dead_code)]
     pub fn exec(&self, name_or_id: &str, argv: &[String]) -> Result<i32> {
+        self.exec_with(name_or_id, argv, &crate::runtime::ExecOptions::default())
+    }
+
+    pub fn exec_with(
+        &self,
+        name_or_id: &str,
+        argv: &[String],
+        opts: &crate::runtime::ExecOptions,
+    ) -> Result<i32> {
         let session = self.get(name_or_id)?;
         let semantic = self.semantic_paths(&session)?;
-        LocalRuntimeBackend.exec(&session, &semantic, argv)
+        LocalRuntimeBackend.exec(&session, &semantic, argv, opts)
+    }
+
+    pub fn cache_promote(&self, name_or_id: &str) -> Result<()> {
+        let session = self.get(name_or_id)?;
+        let semantic = self.semantic_paths(&session)?;
+        crate::runtime::promote_session_target_to_shared(&semantic)
+    }
+
+    pub fn cache_seed(&self, name_or_id: &str) -> Result<bool> {
+        let session = self.get(name_or_id)?;
+        let semantic = self.semantic_paths(&session)?;
+        crate::runtime::seed_session_target_from_shared(&semantic)
     }
 
     pub fn diff(&self, name_or_id: &str) -> Result<String> {

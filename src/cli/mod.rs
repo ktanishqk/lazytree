@@ -81,10 +81,26 @@ pub enum Commands {
     /// Run a command in the session root with semantic cache env set
     Exec {
         session: String,
+        /// Disable canonical mount-namespace paths (path-stable caches)
+        #[arg(long)]
+        no_canonical: bool,
         /// Command and args (use `--` to disambiguate)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+    /// Manage shared semantic build caches
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CacheCommands {
+    /// Copy this session's target dir into the repo shared seed
+    Promote { session: String },
+    /// Populate session target from the shared seed
+    Seed { session: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,10 +266,30 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
             sessions.destroy(&session, force)?;
             println!("Destroyed session: {session}");
         }
-        Commands::Exec { session, command } => {
-            let code = sessions.exec(&session, &command)?;
+        Commands::Exec {
+            session,
+            no_canonical,
+            command,
+        } => {
+            let opts = crate::runtime::ExecOptions {
+                canonical: !no_canonical,
+            };
+            let code = sessions.exec_with(&session, &command, &opts)?;
             return Ok(ExitCode::from(code as u8));
         }
+        Commands::Cache { command } => match command {
+            CacheCommands::Promote { session } => {
+                sessions.cache_promote(&session)?;
+                println!("Promoted target cache from {session} to shared seed");
+            }
+            CacheCommands::Seed { session } => {
+                if sessions.cache_seed(&session)? {
+                    println!("Seeded target cache for {session} from shared seed");
+                } else {
+                    println!("No shared target seed available for {session}");
+                }
+            }
+        },
     }
 
     Ok(ExitCode::SUCCESS)

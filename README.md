@@ -2,7 +2,7 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: M5 semantic cache paths + local `exec`; create hot path optimized (~5–13ms warm).
+> Status: Open cache problem addressed via canonical-path exec (~23× warm cargo check).
 
 ## Idea
 
@@ -44,6 +44,8 @@ lazytree archive <session>
 lazytree doctor [--json]
 lazytree destroy <session> [--force]
 lazytree exec <session> -- <command>
+lazytree cache promote <session>
+lazytree cache seed <session>
 ```
 
 `LAZYTREE_HOME` (default `~/.lazytree`) controls metadata and session storage.
@@ -55,7 +57,7 @@ lazytree exec <session> -- <command>
 ./scripts/m0_benchmark.sh
 ```
 
-See `docs/feasibility-m0.md` and `docs/design-decisions.md`.
+See `docs/canonical-cache.md`, `docs/feasibility-m0.md` and `docs/design-decisions.md`.
 
 ## License
 
