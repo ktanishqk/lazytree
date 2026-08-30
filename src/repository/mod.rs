@@ -26,6 +26,11 @@ pub struct Repository {
     /// Prebuilt index matching `base_commit` (copied into sessions).
     #[serde(default)]
     pub seed_index: Option<String>,
+    /// Cached from source at registration (avoid git spawns on session create).
+    #[serde(default)]
+    pub user_name: Option<String>,
+    #[serde(default)]
+    pub user_email: Option<String>,
     pub created_at: DateTime<Utc>,
     pub state: String,
 }
@@ -119,6 +124,9 @@ impl RepositoryStore {
         }
         fs::copy(&src_index, &seed_index).context("copying seed index")?;
 
+        let user_name = git_config_get(&source, "user.name");
+        let user_email = git_config_get(&source, "user.email");
+
         let repo = Repository {
             version: 1,
             id: id.clone(),
@@ -127,6 +135,8 @@ impl RepositoryStore {
             base_commit,
             object_store: objects.display().to_string(),
             seed_index: Some(seed_index.display().to_string()),
+            user_name,
+            user_email,
             created_at: Utc::now(),
             state: "ready".into(),
         };
@@ -236,6 +246,24 @@ fn git_rev_parse(path: &Path, rev: &str) -> Result<String> {
         bail!("git rev-parse {rev} failed");
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn git_config_get(repo: &Path, key: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["config", "--get", key])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Copy a worktree into `dst`, omitting `.git` so OverlayFS lowerdirs stay
