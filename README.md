@@ -25,8 +25,13 @@ git branch --show-current   # lazytree/ticket-123
 ## Prerequisites (macOS)
 
 - `git`
-- [macFUSE](https://macfuse.github.io/) or [Fuse-T](https://www.fuse-t.org/)
-- `unionfs-fuse` (Homebrew: `brew install unionfs-fuse` — binary may be `unionfs` or `unionfs-fuse`)
+- [Fuse-T](https://www.fuse-t.org/) (no kext) or [macFUSE](https://macfuse.github.io/)
+- `unionfs` or `unionfs-fuse` on `PATH`
+
+Homebrew core has no `unionfs-fuse` formula.
+
+- **Fuse-T:** `brew install --cask fuse-t`, then build [unionfs-fuse](https://github.com/rpodgorny/unionfs-fuse) v3.7 with `-DWITH_LIBFUSE3=TRUE` and install `unionfs`. The `gromgit/fuse` bottle links macFUSE’s `libfuse.2.dylib` and will not run on Fuse-T.
+- **macFUSE:** `brew install --cask macfuse` then `brew install gromgit/fuse/unionfs-fuse`.
 
 macOS uses **unionfs-fuse** for the same lower/upper COW mount shape as Linux OverlayFS.
 Session create stays a mount (not a full tree clone). Canonical `lazytree exec` bind-mounts
