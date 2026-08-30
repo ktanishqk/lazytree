@@ -48,4 +48,5 @@ Living document for PRD §37 questions. Updated as evidence lands.
 - Windows: not in scope (WSL2 or experimental WinFsp later).
 
 Proxy bench (Linux unionfs = macOS plugin path): `docs/benchmarks-macos-proxy.md`.  
+Native Darwin: `docs/benchmarks-macos.md` (`./scripts/bench_backends.sh` writes this on macOS).  
 Full suite vs git worktree: `docs/benchmarks-full-suite.md` (`./scripts/bench_full_suite.sh`).

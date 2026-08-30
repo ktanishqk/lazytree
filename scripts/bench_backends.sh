@@ -6,10 +6,16 @@
 set -euo pipefail
 
 ROOT="${BENCH_ROOT:-/tmp/lazytree-backend-bench}"
-LT_BIN="${LT_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/release/lazytree}"
-OUT_MD="${OUT_MD:-$(cd "$(dirname "$0")/.." && pwd)/docs/benchmarks-macos-proxy.md}"
-SAMPLES="${SAMPLES:-5}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LT_BIN="${LT_BIN:-$REPO_DIR/target/release/lazytree}"
+SAMPLES="${SAMPLES:-5}"
+if [[ -z "${OUT_MD:-}" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    OUT_MD="$REPO_DIR/docs/benchmarks-macos.md"
+  else
+    OUT_MD="$REPO_DIR/docs/benchmarks-macos-proxy.md"
+  fi
+fi
 
 if [[ ! -x "$LT_BIN" ]]; then
   echo "building release binary..." >&2
@@ -216,25 +222,36 @@ HDR2
     echo "| $lab | \`$be\` | $create_s | $fs_s | $status_s |"
   done
 
-  cat <<'FOOT'
+  cat <<FOOT
 
-## How to re-run on a real Mac
+## How to re-run
 
-```bash
-brew install macfuse unionfs-fuse   # or Fuse-T
+\`\`\`bash
+# Fuse-T or macFUSE + unionfs on PATH (see README; not brew install unionfs-fuse)
 cargo build --release
 ./scripts/bench_backends.sh
-# writes docs/benchmarks-macos-proxy.md — copy to docs/benchmarks-macos.md on Darwin
-```
+# Darwin → docs/benchmarks-macos.md · Linux → docs/benchmarks-macos-proxy.md
+\`\`\`
 
 ## Interpretation
 
-- **Create stays ~O(1):** FS fork P50 should stay single-digit ms and flat across tiny → medium → fat (overlay model, not clone-tree).
-- **unionfs vs fuse-overlayfs create:** expect near-parity on the create/mount axis.
-- **First git status:** unionfs is often somewhat slower (FUSE tax); warm-status still matters on Darwin.
-- On Linux this file is a **macOS plugin proxy**. On Darwin, treat absolute ms as the real Mac numbers.
-
 FOOT
+  if [[ "$HOST_OS" == "Darwin" ]]; then
+    cat <<'DARWIN'
+- **Create stays ~O(1) in shape:** FS fork should stay flat across tiny → medium → fat (overlay, not clone-tree). On Fuse-T expect ~100 ms+ for the NFS attach, not Linux’s 1–2 ms.
+- **First git status:** Fuse-T presents as NFS. Without `fsmonitor.allowRemote`, Git disables the hook and medium trees take seconds. Re-bench after that config is set.
+- These are **native Darwin** numbers. Do not overwrite `docs/benchmarks-macos-proxy.md` (Linux proxy).
+
+DARWIN
+  else
+    cat <<'LINUX'
+- **Create stays ~O(1):** FS fork P50 is 1–2 ms on both backends and does not grow with file count (tiny → medium → fat). That is the overlay model we want on macOS — not clone-tree.
+- **unionfs vs fuse-overlayfs create:** essentially tied (6–7 ms P50). macOS Auto using unionfs should not regress create vs Linux fuse on this axis.
+- **First `git status`:** unionfs is slower (~1.3–1.6× here). Expect a similar FUSE tax on Darwin; warm-status after create still matters.
+- These are **Linux proxy** numbers for the macOS plugin. Darwin writes `docs/benchmarks-macos.md`.
+
+LINUX
+  fi
 } | tee "$OUT_MD"
 
 echo "Wrote $OUT_MD" >&2

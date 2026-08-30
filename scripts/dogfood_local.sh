@@ -2,7 +2,7 @@
 # Local dogfood: build LazyTree, create a session, verify real git status + fsmonitor.
 #
 # Linux: fuse-overlayfs (and often passwordless sudo in VMs)
-# macOS: macFUSE or Fuse-T + unionfs-fuse (brew install macfuse unionfs-fuse)
+# macOS: Fuse-T or macFUSE + unionfs on PATH (see README; not `brew install unionfs-fuse`)
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

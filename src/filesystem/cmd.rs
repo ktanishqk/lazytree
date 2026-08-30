@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
@@ -66,8 +66,14 @@ pub fn with_privilege_fallback(
 ) -> Result<bool> {
     let skip_unprivileged = needs_sudo == Some(true);
     if !skip_unprivileged {
-        if unprivileged().is_ok() {
-            return Ok(false);
+        match unprivileged() {
+            Ok(()) => return Ok(false),
+            Err(unpriv_err) => match privileged() {
+                Ok(()) => return Ok(true),
+                Err(priv_err) => {
+                    return Err(unpriv_err).context(priv_err);
+                }
+            },
         }
     }
     privileged()?;

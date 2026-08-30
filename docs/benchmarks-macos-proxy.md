@@ -34,13 +34,13 @@ Samples per metric: 5
 | fat_500x64KB | `fuse_overlayfs` | 8 7 6 6 6 | 2 1 1 1 2 | 108 108 110 108 109 |
 | fat_500x64KB | `unionfs_fuse` | 7 6 6 6 6 | 2 2 2 2 2 | 141 127 137 138 140 |
 
-## How to re-run on a real Mac
+## How to re-run
 
 ```bash
-brew install macfuse unionfs-fuse   # or Fuse-T
+# Fuse-T or macFUSE + unionfs on PATH (see README)
 cargo build --release
 ./scripts/bench_backends.sh
-# writes docs/benchmarks-macos-proxy.md — copy to docs/benchmarks-macos.md on Darwin
+# Linux → this file · Darwin → docs/benchmarks-macos.md
 ```
 
 ## Interpretation
@@ -48,5 +48,5 @@ cargo build --release
 - **Create stays ~O(1):** FS fork P50 is 1–2 ms on both backends and does not grow with file count (tiny → medium → fat). That is the overlay model we want on macOS — not clone-tree.
 - **unionfs vs fuse-overlayfs create:** essentially tied (6–7 ms P50). macOS Auto using unionfs should not regress create vs Linux fuse on this axis.
 - **First `git status`:** unionfs is slower (~1.3–1.6× here). Expect a similar FUSE tax on Darwin; warm-status after create still matters.
-- These are **Linux proxy** numbers for the macOS plugin. Re-run `./scripts/bench_backends.sh` on a Mac for Darwin/macFUSE absolute ms.
+- These are **Linux proxy** numbers. Native Darwin results live in `docs/benchmarks-macos.md`.
 
