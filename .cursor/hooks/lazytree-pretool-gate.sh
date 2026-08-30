@@ -60,8 +60,8 @@ bad = [p for p in candidates if p and not under(root, p)]
 if bad:
     print(json.dumps({
         "permission": "deny",
-        "userMessage": f"LazyTree gate: refusing tool outside session root {root}: {bad[0]}",
-        "agentMessage": (
+        "user_message": f"LazyTree gate: refusing tool outside session root {root}: {bad[0]}",
+        "agent_message": (
             f"Edit/write targeted {bad[0]} which is outside LazyTree root {root}. "
             f"Re-run against files under that root (see LAZYTREE_ROOT / .cursor/lazytree-sessions)."
         ),

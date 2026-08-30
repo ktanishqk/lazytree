@@ -105,8 +105,8 @@ if parts and parts[0] == "git":
 if dangerous:
     print(json.dumps({
         "permission": "deny",
-        "userMessage": f"LazyTree gate: {reason} must run inside {root}",
-        "agentMessage": (
+        "user_message": f"LazyTree gate: {reason} must run inside {root}",
+        "agent_message": (
             f"Run git -C {root} ... or set working_directory to LAZYTREE_ROOT. "
             f"Primary checkout mutations are out of policy for this session."
         ),
