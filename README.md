@@ -2,7 +2,7 @@
 
 Copy-on-write development workspaces for parallel coding agents.
 
-> Status: Open cache problem addressed via canonical-path exec (~23× warm cargo check).
+> Status: create ~7–11ms P50 on fuse-overlayfs; Cursor soft integration (hooks/skill/gates) shipped.
 
 ## Idea
 
