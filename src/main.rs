@@ -2,6 +2,7 @@ mod cli;
 mod cursor_integration;
 mod doctor;
 mod filesystem;
+mod fsmonitor;
 mod git;
 mod locking;
 mod metadata;

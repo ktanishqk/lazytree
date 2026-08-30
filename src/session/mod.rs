@@ -242,6 +242,7 @@ impl SessionStore {
         if let Err(err) = git::setup_session_git(&GitSetup {
             git_dir: &plan.git_dir,
             work_tree: &plan.root,
+            upper_dir: &plan.upper,
             branch: &plan.branch,
             base_revision: &plan.base_revision,
             object_store: &plan.object_store,

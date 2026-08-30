@@ -12,6 +12,8 @@ use crate::util::{abs_path, copy_file};
 pub struct GitSetup<'a> {
     pub git_dir: &'a Path,
     pub work_tree: &'a Path,
+    /// Session overlay upperdir — used for core.fsmonitor.
+    pub upper_dir: &'a Path,
     pub branch: &'a str,
     pub base_revision: &'a str,
     pub object_store: &'a Path,
@@ -49,6 +51,7 @@ pub fn setup_session_git(cfg: &GitSetup<'_>) -> Result<()> {
         copy_file(cfg.seed_index.unwrap(), &cfg.git_dir.join("index"))?;
         write_session_config(cfg)?;
         write_gitdir_pointer(cfg)?;
+        crate::fsmonitor::install_session_fsmonitor(cfg.git_dir, cfg.upper_dir)?;
         return Ok(());
     }
 
@@ -80,6 +83,7 @@ pub fn setup_session_git(cfg: &GitSetup<'_>) -> Result<()> {
 
     write_session_config(cfg)?;
     write_gitdir_pointer(cfg)?;
+    crate::fsmonitor::install_session_fsmonitor(cfg.git_dir, cfg.upper_dir)?;
     Ok(())
 }
 

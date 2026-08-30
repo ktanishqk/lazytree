@@ -98,6 +98,16 @@ pub enum Commands {
         #[command(subcommand)]
         command: CursorCommands,
     },
+    /// Internal: Git core.fsmonitor hook (protocol v2). Invoked by Git, not humans.
+    #[command(hide = true)]
+    GitFsmonitor {
+        /// Session overlay upperdir
+        #[arg(long)]
+        upper: PathBuf,
+        /// Args from Git: <version> <token>
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        git_args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -498,6 +508,19 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         },
+        Commands::GitFsmonitor { upper, git_args } => {
+            // Git invokes: <hook> <version> <token>
+            let version = git_args.first().map(String::as_str).unwrap_or("2");
+            let token = git_args.get(1).map(String::as_str).unwrap_or("");
+            if version != "2" {
+                // We only speak v2; return trivial full-scan marker so Git stays correct.
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                out.write_all(b"lt:0\0/\0")?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            crate::fsmonitor::query_v2(&upper, token)?;
+        }
     }
 
     Ok(ExitCode::SUCCESS)

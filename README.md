@@ -32,6 +32,9 @@ macOS uses **unionfs-fuse** for the same lower/upper COW mount shape as Linux Ov
 Session create stays a mount (not a full tree clone). Canonical `lazytree exec` bind-mounts
 are Linux-only; on macOS exec runs in the session root with semantic cache env set.
 
+Sessions enable Git’s **`core.fsmonitor`** hook (protocol v2) against the overlay upperdir so
+real `git status` only inspects changed paths. Disable with `LAZYTREE_FSMONITOR=0`.
+
 ## Build
 
 ```bash
@@ -94,7 +97,7 @@ cd npm && npm link   # requires native binary on PATH or LAZYTREE_BIN
 
 See `docs/canonical-cache.md`, `docs/feasibility-m0.md`, `docs/cursor-integration.md` and `docs/design-decisions.md`.
 
-Validate: `./scripts/smoke.sh` · full suite: `./scripts/bench_full_suite.sh` (worktree vs fuse vs unionfs) · backend proxy: `./scripts/bench_backends.sh`.
+Validate: `./scripts/smoke.sh` · full suite: `./scripts/bench_full_suite.sh` · local dogfood: `./scripts/dogfood_local.sh`.
 
 ## License
 
