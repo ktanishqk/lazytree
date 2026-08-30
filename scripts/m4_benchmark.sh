@@ -180,7 +180,7 @@ bench_case() {
 | Git state init P50 | n/a | $(median "${lt_git[@]}") ms |
 | First \`git status\` P50 | $(median "${wt_status[@]}") ms | $(median "${lt_status[@]}") ms |
 | Destroy P50 | $(median "${wt_destroy[@]}") ms | $(median "${lt_destroy[@]}") ms |
-| Disk for ${SAMPLES} sessions | ${wt_disk} B | ${lt_sess_bytes} B (session-local only) |
+| Disk for ${SAMPLES} sessions | ${wt_disk} B | ${lt_sess_bytes} B (upper+git+meta only) |
 | Upper after 1 edit | n/a | ${upper_before} → ${upper_after} B |
 
 ROW
