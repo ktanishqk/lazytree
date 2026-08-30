@@ -55,6 +55,7 @@ impl RepositoryStore {
         fs::create_dir_all(&repo_dir)?;
         fs::create_dir_all(&objects)?;
         fs::create_dir_all(&seed_dir)?;
+        fs::create_dir_all(repo_dir.join("semantic").join("shared"))?;
 
         // Filesystem lowerdir must NOT include `.git`. Whiteouting a full .git
         // through OverlayFS/FUSE on every session create was ~O(git files) and
