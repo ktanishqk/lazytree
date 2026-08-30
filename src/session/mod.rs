@@ -279,6 +279,20 @@ impl SessionStore {
                 total_ms: filesystem_ms + git_ms,
             });
         });
+        // Warm FUSE page cache + git index for first `git status` without
+        // blocking create. Cold status on fuse-overlayfs can be 10× warm.
+        {
+            let root = session.root_path();
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("git")
+                    .args(["-C"])
+                    .arg(&root)
+                    .args(["status", "-sb", "--porcelain"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            });
+        }
         Ok(session)
     }
 

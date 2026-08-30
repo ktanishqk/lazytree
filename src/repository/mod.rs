@@ -63,21 +63,40 @@ impl RepositoryStore {
             .with_context(|| format!("copying worktree from {}", source.display()))?;
 
         // Shared immutable object store (separate from the COW lowerdir).
-        // `cp -a src objects` creates `objects` as a copy of src (do not mkdir first).
+        // Do not `cp -a .git/objects` directly — concurrent auto-gc removes
+        // loose object dirs mid-walk. A bare clone is a consistent snapshot.
         {
-            let src_objects = source.join(".git/objects");
             if objects.exists() {
                 fs::remove_dir_all(&objects)?;
             }
-            let status = Command::new("cp")
-                .args(["-a"])
-                .arg(&src_objects)
-                .arg(&objects)
-                .status()
-                .context("cp git objects")?;
-            if !status.success() {
-                bail!("failed to copy git objects from {}", src_objects.display());
+            let bare = repo_dir.join(".objects-clone.git");
+            if bare.exists() {
+                fs::remove_dir_all(&bare)?;
             }
+            let status = Command::new("git")
+                .args([
+                    "clone",
+                    "--bare",
+                    "--quiet",
+                    "--no-hardlinks",
+                    source.to_str().unwrap_or("."),
+                    bare.to_str().unwrap_or(".objects-clone.git"),
+                ])
+                .status()
+                .context("git clone --bare for object store")?;
+            if !status.success() {
+                let _ = fs::remove_dir_all(&bare);
+                bail!("failed to snapshot git objects from {}", source.display());
+            }
+            let cloned_objects = bare.join("objects");
+            fs::rename(&cloned_objects, &objects).with_context(|| {
+                format!(
+                    "moving {} -> {}",
+                    cloned_objects.display(),
+                    objects.display()
+                )
+            })?;
+            let _ = fs::remove_dir_all(&bare);
         }
 
         // Seed index: byte-copy into sessions instead of read-tree.
@@ -209,17 +228,41 @@ fn git_rev_parse(path: &Path, rev: &str) -> Result<String> {
 
 /// Copy a worktree into `dst`, omitting `.git` so OverlayFS lowerdirs stay
 /// free of Git metadata (session create then only writes a small gitdir file).
+///
+/// Important: do **not** `cp -a src/.` then delete `.git`. Right after a commit,
+/// git auto-gc can move loose objects while `cp` walks `.git/objects`, causing
+/// flaky `cannot stat` failures on medium+ repos.
 fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
-    let status = Command::new("cp")
-        .args(["-a"])
-        .arg(format!("{}/.", src.display()))
-        .arg(dst)
-        .status()
-        .context("cp -a worktree")?;
-    if !status.success() {
-        bail!("cp -a worktree failed from {} to {}", src.display(), dst.display());
+
+    // Prefer rsync exclude (fast, correct). Fall back to tar exclude.
+    let rsync = Command::new("rsync")
+        .args(["-a", "--delete", "--exclude=.git"])
+        .arg(format!("{}/", src.display()))
+        .arg(format!("{}/", dst.display()))
+        .status();
+    match rsync {
+        Ok(st) if st.success() => {}
+        _ => {
+            let status = Command::new("bash")
+                .arg("-c")
+                .arg(format!(
+                    "tar -C {} --exclude=.git -cf - . | tar -C {} -xf -",
+                    shell_escape(&src.display().to_string()),
+                    shell_escape(&dst.display().to_string()),
+                ))
+                .status()
+                .context("tar exclude .git worktree copy")?;
+            if !status.success() {
+                bail!(
+                    "copying worktree (excluding .git) failed from {} to {}",
+                    src.display(),
+                    dst.display()
+                );
+            }
+        }
     }
+
     let embedded_git = dst.join(".git");
     if embedded_git.exists() {
         if embedded_git.is_dir() {
@@ -229,6 +272,10 @@ fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn chmod_writable_tree(path: &Path) -> Result<()> {

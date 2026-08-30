@@ -6,8 +6,9 @@ BIN="${LAZYTREE_BIN:-$ROOT/target/release/lazytree}"
 HOME_DIR="${TMPDIR:-/tmp}/lt-cursor-hook-test-$$"
 WORK_DIR="$HOME_DIR/workspace"
 trap '
+  set +e
   if command -v findmnt >/dev/null 2>&1; then
-    findmnt -n -o TARGET | grep "^$HOME_DIR" | sort -r | while read -r m; do
+    findmnt -n -o TARGET 2>/dev/null | grep "^$HOME_DIR" | sort -r | while read -r m; do
       sudo umount "$m" 2>/dev/null || umount "$m" 2>/dev/null || true
     done
   fi

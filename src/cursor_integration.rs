@@ -44,8 +44,10 @@ pub fn print_integration_hints(repo_root: &Path) {
     println!("  4. Use skill `/lazytree-session` so the agent edits only that root");
     println!("  5. Optional UI branch sync: `lazytree cursor open <session>`");
     println!();
-    println!("Cloud Agents: sessionStart does NOT run; bake CLI + skill into the image.");
-    println!("Gates (preToolUse / beforeShellExecution) still run in cloud.");
+    println!("Cloud Agents: sessionStart does NOT run.");
+    println!("  Use: lazytree cursor bootstrap [--repo <id>] [--session-id <id>]");
+    println!("  (creates/reuses session + writes .cursor/lazytree-sessions/<id>.json)");
+    println!("  Bake CLI + skill into the image; gates still run in cloud.");
     println!();
     println!("Project root hint: {}", repo_root.display());
 }
@@ -95,7 +97,39 @@ pub fn install_into_project(bundled: &Path, target: &Path) -> Result<Vec<PathBuf
         }
         written.push(to);
     }
+    // Ignore ephemeral session maps in the consumer project.
+    let ignore = dest.join(".gitignore");
+    if !ignore.is_file() {
+        fs::write(&ignore, "lazytree-sessions/\n")?;
+        written.push(ignore);
+    }
     Ok(written)
+}
+
+pub fn write_session_mapping(
+    project: &Path,
+    session_id: &str,
+    session: &Session,
+) -> Result<PathBuf> {
+    let dir = project.join(".cursor/lazytree-sessions");
+    fs::create_dir_all(&dir)?;
+    // Keep maps out of git when possible.
+    let ignore = project.join(".cursor/.gitignore");
+    if !ignore.is_file() {
+        let _ = fs::write(&ignore, "lazytree-sessions/\n");
+    }
+    let path = dir.join(format!("{session_id}.json"));
+    let body = serde_json::json!({
+        "session_id": session_id,
+        "name": session.name,
+        "root": session.root_path().display().to_string(),
+        "branch": session.branch,
+        "repository_id": session.repository_id,
+        "created_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    });
+    fs::write(&path, serde_json::to_vec_pretty(&body)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
 }
 
 /// Locate the directory that ships `.cursor/` assets (dev tree or next to binary).

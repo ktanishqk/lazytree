@@ -131,6 +131,22 @@ pub enum CursorCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Create/reuse a session and write a Cursor mapping file (Cloud / no sessionStart)
+    Bootstrap {
+        /// Session name (default: cursor-<pid/time>)
+        name: Option<String>,
+        /// Repository id or source path
+        #[arg(long)]
+        repo: Option<String>,
+        /// Conversation/session id for the mapping filename
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Project directory that holds `.cursor/lazytree-sessions/` (default: cwd)
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -372,6 +388,56 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 } else {
                     crate::cursor_integration::print_integration_hints(&cwd);
+                }
+            }
+            CursorCommands::Bootstrap {
+                name,
+                repo,
+                session_id,
+                project,
+                json,
+            } => {
+                let project = project
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let name = name.unwrap_or_else(|| {
+                    format!(
+                        "cursor-{}",
+                        std::process::id()
+                    )
+                });
+                let session_id = session_id.unwrap_or_else(|| name.clone());
+                // Reuse existing session by name when present.
+                let session = match sessions.get(&name) {
+                    Ok(s) => s,
+                    Err(_) => sessions.create(&name, repo.as_deref(), None)?,
+                };
+                let map_path = crate::cursor_integration::write_session_mapping(
+                    &project,
+                    &session_id,
+                    &session,
+                )?;
+                let info = crate::cursor_integration::open_session_info(&session);
+                if json {
+                    let mut v = info;
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "mapping".into(),
+                            serde_json::Value::String(map_path.display().to_string()),
+                        );
+                        obj.insert(
+                            "session_id".into(),
+                            serde_json::Value::String(session_id),
+                        );
+                    }
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                } else {
+                    println!("{}", session.root_path().display());
+                    eprintln!(
+                        "mapped {} -> {} (branch {})",
+                        session_id,
+                        map_path.display(),
+                        session.branch
+                    );
                 }
             }
         },
