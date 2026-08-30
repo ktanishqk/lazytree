@@ -3,19 +3,22 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": ".cursor/hooks/lazytree-session-start.sh"
+        "command": ".cursor/hooks/lazytree-session-start.sh",
+        "timeout": 15
       }
     ],
     "preToolUse": [
       {
         "command": ".cursor/hooks/lazytree-pretool-gate.sh",
-        "matcher": "Write|Edit|Delete|ApplyPatch|StrReplace"
+        "matcher": "Write|Edit|Delete|ApplyPatch|StrReplace",
+        "timeout": 5
       }
     ],
     "beforeShellExecution": [
       {
         "command": ".cursor/hooks/lazytree-shell-gate.sh",
-        "matcher": "git\\s"
+        "matcher": "git\\s",
+        "timeout": 5
       }
     ]
   }
