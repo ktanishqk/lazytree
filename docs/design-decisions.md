@@ -10,7 +10,7 @@ Living document for PRD §37 questions. Updated as evidence lands.
 | 2 | Cheap clone/reflink of Git index | **Done (D13):** copy `seed/index`; reflink when FS supports it (nested cloud often does not). |
 | 3 | OverlayFS copy-up of unexpectedly large data | **Partial:** 64KB file edit → ~65KB upper (expected). Broader profiling TBD. |
 | 4 | File watchers | **Works on fuse-overlayfs session root:** `inotifywait` saw `MODIFY` on overwrite and `CREATE` for a new file (Cloud VM probe, 2026-08-30). |
-| 5 | mmap for compilers/tools | **Canonical exec** helps path-sensitive caches (Cargo). mmap identity across sessions still TBD. |
+| 5 | mmap for compilers/tools | **Works on fuse-overlayfs** (8MB random blob mmap scan succeeds). Path-sensitive caches still need canonical exec. |
 | 6 | Inode differences vs build systems | **Mitigated for Cargo** via bind-mount to stable canonical paths in `lazytree exec`. |
 | 7 | Deletion/whiteout vs Git | **Works;** `.git` is never in lowerdir — session only writes a `gitdir:` file. |
 | 8 | Builds inside merged view | **Works** with `lazytree exec`; keep `target/` out of upper when possible (canonical target). |
