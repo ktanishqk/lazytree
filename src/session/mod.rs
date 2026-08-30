@@ -123,6 +123,7 @@ struct CreatePlan {
     repo_base_commit: String,
     object_store: PathBuf,
     seed_index: Option<PathBuf>,
+    source_path: PathBuf,
     base_revision: String,
     branch: String,
     preferred: FilesystemBackendKind,
@@ -200,6 +201,7 @@ impl SessionStore {
                 repo_base_commit: repo.base_commit.clone(),
                 object_store: PathBuf::from(&repo.object_store),
                 seed_index: repo.seed_index.as_ref().map(PathBuf::from),
+                source_path: PathBuf::from(&repo.source_path),
                 base_revision: from.unwrap_or(repo.base_commit.as_str()).to_string(),
                 branch: format!("lazytree/{name}"),
                 preferred: cfg.filesystem_backend,
@@ -237,6 +239,7 @@ impl SessionStore {
             object_store: plan.object_store.clone(),
             seed_index: plan.seed_index.clone(),
             seed_commit: Some(plan.repo_base_commit.clone()),
+            identity_from: Some(plan.source_path.clone()),
         }) {
             let _ = filesystem::umount_with_backend(&plan.root, Some(mounted.backend));
             let _ = self.cleanup_failed_create(&plan);

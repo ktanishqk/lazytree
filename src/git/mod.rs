@@ -18,6 +18,8 @@ pub struct GitSetup {
     pub seed_index: Option<PathBuf>,
     /// Commit OID the seed index was built for (usually the registered base).
     pub seed_commit: Option<String>,
+    /// Optional source checkout to inherit `user.name` / `user.email` from.
+    pub identity_from: Option<PathBuf>,
 }
 
 /// Initialize private Git metadata for a session and point the work tree at it
@@ -61,7 +63,7 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
             format!("ref: refs/heads/{}\n", cfg.branch),
         )?;
         copy_index(cfg.seed_index.as_ref().unwrap(), &cfg.git_dir.join("index"))?;
-        write_session_config(&cfg.git_dir, &cfg.work_tree)?;
+        write_session_config(&cfg.git_dir, &cfg.work_tree, cfg.identity_from.as_deref())?;
         write_gitdir_pointer(cfg)?;
         return Ok(());
     }
@@ -105,7 +107,7 @@ pub fn setup_session_git(cfg: &GitSetup) -> Result<()> {
         run_git(&cfg.git_dir, None, &["read-tree", &tree])?;
     }
 
-    write_session_config(&cfg.git_dir, &cfg.work_tree)?;
+    write_session_config(&cfg.git_dir, &cfg.work_tree, cfg.identity_from.as_deref())?;
     write_gitdir_pointer(cfg)?;
     Ok(())
 }
@@ -147,16 +149,50 @@ fn write_branch_ref(git_dir: &Path, branch: &str, oid: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_session_config(git_dir: &Path, work_tree: &Path) -> Result<()> {
+fn write_session_config(git_dir: &Path, work_tree: &Path, identity_from: Option<&Path>) -> Result<()> {
     // Absolute worktree avoids surprises when callers chdir.
     let abs_wt = fs::canonicalize(work_tree).unwrap_or_else(|_| work_tree.to_path_buf());
-    let body = format!(
+    let mut body = format!(
         "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tworktree = {}\n",
         abs_wt.display()
     );
+    if let Some(src) = identity_from {
+        let name = git_config_get(src, "user.name");
+        let email = git_config_get(src, "user.email");
+        if name.is_some() || email.is_some() {
+            body.push_str("[user]\n");
+            if let Some(n) = name {
+                body.push_str(&format!("\tname = {n}\n"));
+            }
+            if let Some(e) = email {
+                body.push_str(&format!("\temail = {e}\n"));
+            }
+        }
+    }
     fs::write(git_dir.join("config"), body)
         .with_context(|| format!("writing {}/config", git_dir.display()))?;
     Ok(())
+}
+
+fn git_config_get(repo: &Path, key: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C"])
+        .arg(repo)
+        .args(["config", "--get", key])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn copy_index(src: &Path, dst: &Path) -> Result<()> {
