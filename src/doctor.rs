@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::filesystem::is_mounted;
 use crate::metadata::{atomic_write_json, Paths};
 use crate::repository::RepositoryStore;
-use crate::session::{Session, SessionStore};
+use crate::session::SessionStore;
 
 #[derive(Debug, Serialize)]
 pub struct DoctorReport {
@@ -111,11 +111,18 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
     if sessions_dir.is_dir() {
         for entry in fs::read_dir(sessions_dir)? {
             let entry = entry?;
-            if entry.path().is_dir() && !entry.path().join("metadata.json").exists() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == ".names") {
+                continue;
+            }
+            if path.is_dir() && !path.join("metadata.json").exists() {
                 issues.push(issue(
                     "warn",
                     "orphan_session_dir",
-                    format!("session directory without metadata: {}", entry.path().display()),
+                    format!(
+                        "session directory without metadata: {} (incomplete create? try destroy --force or remove the dir)",
+                        path.display()
+                    ),
                 ));
             }
         }
@@ -131,10 +138,4 @@ fn issue(severity: &str, code: &str, message: String) -> DoctorIssue {
         code: code.into(),
         message,
     }
-}
-
-#[allow(dead_code)]
-pub fn remount_if_needed(session: &Session, repos: &RepositoryStore) -> Result<()> {
-    let _ = (session, repos);
-    Ok(())
 }

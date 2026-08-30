@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -53,7 +53,6 @@ impl RepositoryStore {
         let seed_dir = repo_dir.join("seed");
 
         fs::create_dir_all(&repo_dir)?;
-        fs::create_dir_all(&objects)?;
         fs::create_dir_all(&seed_dir)?;
         fs::create_dir_all(repo_dir.join("semantic").join("shared"))?;
 
@@ -64,7 +63,7 @@ impl RepositoryStore {
             .with_context(|| format!("copying worktree from {}", source.display()))?;
 
         // Shared immutable object store (separate from the COW lowerdir).
-        // dst must receive *contents* of objects/, not a nested objects/objects.
+        // `cp -a src objects` creates `objects` as a copy of src (do not mkdir first).
         {
             let src_objects = source.join(".git/objects");
             if objects.exists() {
@@ -208,23 +207,6 @@ fn git_rev_parse(path: &Path, rev: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-#[allow(dead_code)]
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let status = Command::new("cp")
-        .args(["-a"])
-        .arg(src)
-        .arg(dst)
-        .status()
-        .context("cp -a")?;
-    if !status.success() {
-        bail!("cp -a failed from {} to {}", src.display(), dst.display());
-    }
-    Ok(())
-}
-
 /// Copy a worktree into `dst`, omitting `.git` so OverlayFS lowerdirs stay
 /// free of Git metadata (session create then only writes a small gitdir file).
 fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
@@ -255,9 +237,4 @@ fn chmod_writable_tree(path: &Path) -> Result<()> {
         .arg(path)
         .status();
     Ok(())
-}
-
-#[allow(dead_code)]
-pub fn repo_base_path(repo: &Repository) -> PathBuf {
-    PathBuf::from(&repo.base_path)
 }

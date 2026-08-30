@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -100,7 +101,7 @@ pub enum RepoCommands {
     },
 }
 
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli) -> Result<ExitCode> {
     let paths = Paths::resolve(cli.home)?;
     paths.ensure_layout()?;
 
@@ -227,9 +228,10 @@ pub fn run(cli: Cli) -> Result<()> {
                 for i in &report.issues {
                     println!("[{}] {}: {}", i.severity, i.code, i.message);
                 }
-                if !report.ok {
-                    std::process::exit(1);
-                }
+            }
+            if !report.ok {
+                // Exit 1 without aborting via process::exit so Drop runs cleanly.
+                return Ok(ExitCode::from(1));
             }
         }
         Commands::Destroy { session, force } => {
@@ -238,5 +240,5 @@ pub fn run(cli: Cli) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
