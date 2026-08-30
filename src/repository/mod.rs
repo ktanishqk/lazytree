@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::locking;
 use crate::metadata::{atomic_write_json, read_json, Paths};
+use crate::util::{shell_quote, short_id};
 
 #[derive(Debug, Clone)]
 pub struct RepositoryStore {
@@ -52,7 +53,7 @@ impl RepositoryStore {
         ensure_clean_git_repo(&source)?;
         let base_commit = git_rev_parse(&source, "HEAD")?;
 
-        let id = format!("repo_{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]);
+        let id = format!("repo_{}", short_id());
         let repo_dir = self.paths.repo_dir(&id);
         let base_path = repo_dir.join("base");
         let objects = repo_dir.join("git-objects");
@@ -288,8 +289,8 @@ fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
                 .arg("-c")
                 .arg(format!(
                     "tar -C {} --exclude=.git -cf - . | tar -C {} -xf -",
-                    shell_escape(&src.display().to_string()),
-                    shell_escape(&dst.display().to_string()),
+                    shell_quote(&src.display().to_string()),
+                    shell_quote(&dst.display().to_string()),
                 ))
                 .status()
                 .context("tar exclude .git worktree copy")?;
@@ -312,10 +313,6 @@ fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn chmod_writable_tree(path: &Path) -> Result<()> {

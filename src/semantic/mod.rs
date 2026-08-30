@@ -1,8 +1,4 @@
-//! Semantic/cache state (Milestone 5).
-//!
-//! Shared read-mostly caches live on the repository; each session gets a
-//! writable delta directory. Tools are pointed at these via environment
-//! variables — LazyTree does not snapshot running language servers.
+//! Shared + per-session cache directories (Milestone 5).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,40 +18,27 @@ pub struct SemanticPaths {
 impl SemanticPaths {
     pub fn for_session(repo_dir: &Path, session_dir: &Path) -> Self {
         Self {
-            shared: repo_dir.join("semantic").join("shared"),
-            session_writable: session_dir.join("semantic").join("writable"),
+            shared: repo_dir.join("semantic/shared"),
+            session_writable: session_dir.join("semantic/writable"),
         }
     }
 
-    pub fn ensure(&self) -> Result<()> {
+    /// Create roots only — subdirs appear on demand via `env_pairs` / exec.
+    pub fn ensure_roots(&self) -> Result<()> {
         fs::create_dir_all(&self.shared)
             .with_context(|| format!("creating {}", self.shared.display()))?;
         fs::create_dir_all(&self.session_writable)
             .with_context(|| format!("creating {}", self.session_writable.display()))?;
-        // Conventional subdirs so ecosystems have somewhere obvious to put data.
-        for sub in ["cargo-home", "caches", "indexes"] {
-            fs::create_dir_all(self.shared.join(sub))?;
-            fs::create_dir_all(self.session_writable.join(sub))?;
-        }
         Ok(())
     }
 
-    /// Env pairs for `lazytree exec` / agent wrappers.
-    pub fn env_pairs(&self) -> Vec<(String, String)> {
-        vec![
-            (
-                ENV_SHARED_CACHE.to_string(),
-                self.shared.display().to_string(),
-            ),
-            (
-                ENV_SESSION_CACHE.to_string(),
-                self.session_writable.display().to_string(),
-            ),
-            // Handy defaults for Rust tooling when users opt in via exec.
-            (
-                "CARGO_HOME".to_string(),
-                self.shared.join("cargo-home").display().to_string(),
-            ),
+    pub fn env_pairs(&self) -> [(&'static str, PathBuf); 3] {
+        let cargo_home = self.shared.join("cargo-home");
+        let _ = fs::create_dir_all(&cargo_home);
+        [
+            (ENV_SHARED_CACHE, self.shared.clone()),
+            (ENV_SESSION_CACHE, self.session_writable.clone()),
+            ("CARGO_HOME", cargo_home),
         ]
     }
 }

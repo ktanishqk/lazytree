@@ -221,9 +221,8 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
             from,
             json,
         } => {
-            let session = sessions.create(&name, repo.as_deref(), from.as_deref())?;
+            let (session, timings) = sessions.create(&name, repo.as_deref(), from.as_deref())?;
             if json {
-                let timings = crate::session::take_last_create_timings();
                 let out = serde_json::json!({
                     "id": session.id,
                     "name": session.name,
@@ -248,11 +247,15 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
             } else if list.is_empty() {
                 println!("(no sessions)");
             } else {
-                for s in list {
-                    let state = if s.lifecycle == "archived" {
+                    for s in list {
+                    let state = if s.lifecycle == crate::session::Lifecycle::Archived {
                         "archived"
                     } else {
-                        s.filesystem.state.as_str()
+                        match s.filesystem.state {
+                            crate::session::FsState::Mounted => "mounted",
+                            crate::session::FsState::Unmounted => "unmounted",
+                            crate::session::FsState::Archived => "archived",
+                        }
                     };
                     println!(
                         "{}\t{}\t{}\t{}",
@@ -277,11 +280,11 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                 println!("branch:               {}", st.branch);
                 println!("dirty:                {}", st.dirty);
                 println!("unexported_commits:   {}", st.unexported_commits);
-                println!("filesystem:           {} ({:?})", st.filesystem_state, st.filesystem_backend);
-                println!("git:                  {}", st.git_state);
-                println!("semantic:             {}", st.semantic_state);
-                println!("runtime:              {}", st.runtime_state);
-                println!("lifecycle:            {}", st.lifecycle);
+                println!("filesystem:           {:?} ({:?})", st.filesystem_state, st.filesystem_backend);
+                println!("git:                  {:?}", st.git_state);
+                println!("semantic:             {:?}", st.semantic_state);
+                println!("runtime:              {:?}", st.runtime_state);
+                println!("lifecycle:            {:?}", st.lifecycle);
                 println!("upper_files:          {}", st.upper_files);
                 println!("filesystem_bytes:     {}", st.filesystem_bytes_written);
                 println!("shared_cache:         {}", st.shared_cache);
@@ -419,7 +422,7 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
                 // Reuse existing session by name when present.
                 let session = match sessions.get(&name) {
                     Ok(s) => s,
-                    Err(_) => sessions.create(&name, repo.as_deref(), None)?,
+                    Err(_) => sessions.create(&name, repo.as_deref(), None)?.0,
                 };
                 let map_path = crate::cursor_integration::write_session_mapping(
                     &project,

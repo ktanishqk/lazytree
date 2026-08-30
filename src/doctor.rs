@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::filesystem::is_mounted;
 use crate::metadata::{atomic_write_json, Paths};
 use crate::repository::RepositoryStore;
-use crate::session::SessionStore;
+use crate::session::{FsState, LayerStatus, Lifecycle, SessionStore};
+
 
 #[derive(Debug, Serialize)]
 pub struct DoctorReport {
@@ -61,7 +62,7 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         }
 
         let mounted = is_mounted(&root).unwrap_or(false);
-        if session.filesystem.state == "mounted" && !mounted {
+        if session.filesystem.state == FsState::Mounted && !mounted {
             issues.push(issue(
                 "warn",
                 "stale_mount_metadata",
@@ -70,10 +71,10 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
                     session.name
                 ),
             ));
-            session.filesystem.state = "unmounted".into();
+            session.filesystem.state = FsState::Unmounted;
             session.updated_at = chrono::Utc::now();
             let _ = atomic_write_json(&dir.join("metadata.json"), &session);
-        } else if session.filesystem.state == "unmounted" && mounted {
+        } else if session.filesystem.state == FsState::Unmounted && mounted {
             issues.push(issue(
                 "warn",
                 "unexpected_mount",
@@ -85,7 +86,11 @@ pub fn run_doctor(paths: &Paths, sessions: &SessionStore, repos: &RepositoryStor
         }
 
         let git_dir = dir.join("git");
-        if session.git.state == "ready" && !git_dir.join("HEAD").exists() && session.filesystem.state != "archived" {
+        if session.git.state == LayerStatus::Ready
+            && !git_dir.join("HEAD").exists()
+            && session.filesystem.state != FsState::Archived
+            && session.lifecycle != Lifecycle::Archived
+        {
             issues.push(issue(
                 "error",
                 "missing_git_dir",

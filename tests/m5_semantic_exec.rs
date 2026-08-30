@@ -83,8 +83,8 @@ fn semantic_env_and_lazy_exec() {
     let stv: serde_json::Value = serde_json::from_slice(&st.stdout).unwrap();
     let shared = PathBuf::from(stv["shared_cache"].as_str().unwrap());
     let session_cache = PathBuf::from(stv["session_cache"].as_str().unwrap());
-    assert!(shared.join("cargo-home").is_dir());
-    assert!(session_cache.join("caches").is_dir());
+    assert!(shared.is_dir(), "shared cache root");
+    assert!(session_cache.is_dir(), "session cache root");
 
     // exec injects env; runtime stays lazy (no daemon)
     let out = run_lt(
@@ -95,11 +95,12 @@ fn semantic_env_and_lazy_exec() {
             "--",
             "bash",
             "-lc",
-            "test -n \"$LAZYTREE_SHARED_CACHE\" && test -n \"$LAZYTREE_SESSION_CACHE\" && test -f foo.txt && echo OK",
+            "test -n \"$LAZYTREE_SHARED_CACHE\" && test -n \"$LAZYTREE_SESSION_CACHE\" && test -n \"$CARGO_HOME\" && test -d \"$CARGO_HOME\" && test -f foo.txt && echo OK",
         ],
     );
     assert_ok(&out, "exec");
     assert!(String::from_utf8_lossy(&out.stdout).contains("OK"));
+    assert!(shared.join("cargo-home").is_dir());
 
     let st2 = run_lt(&home, &["status", "s1", "--json"]);
     assert_ok(&st2, "status after exec");

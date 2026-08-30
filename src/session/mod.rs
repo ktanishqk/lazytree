@@ -1,7 +1,6 @@
-use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -15,12 +14,9 @@ use crate::metadata::{
     Paths,
 };
 use crate::repository::RepositoryStore;
-use crate::runtime::{LocalRuntimeBackend, RuntimeBackend};
+use crate::runtime;
 use crate::semantic::SemanticPaths;
-
-thread_local! {
-    static LAST_CREATE_TIMINGS: RefCell<Option<CreateTimings>> = const { RefCell::new(None) };
-}
+use crate::util::short_id;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateTimings {
@@ -29,14 +25,36 @@ pub struct CreateTimings {
     pub total_ms: u64,
 }
 
-pub fn take_last_create_timings() -> Option<CreateTimings> {
-    LAST_CREATE_TIMINGS.with(|t| t.borrow_mut().take())
-}
-
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     paths: Paths,
     repos: RepositoryStore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Lifecycle {
+    #[default]
+    Ready,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsState {
+    Mounted,
+    Unmounted,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerStatus {
+    Ready,
+    Inherited,
+    Published,
+    #[serde(rename = "none")]
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,27 +71,26 @@ pub struct Session {
     pub runtime: RuntimeMeta,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Absolute path to session directory under LazyTree home.
-    pub session_dir: String,
+    pub session_dir: PathBuf,
     #[serde(default)]
-    pub lifecycle: String,
+    pub lifecycle: Lifecycle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilesystemMeta {
     pub backend: FilesystemBackendKind,
-    pub state: String,
+    pub state: FsState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerState {
-    pub state: String,
+    pub state: LayerStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeMeta {
     pub backend: String,
-    pub state: String,
+    pub state: LayerStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,12 +100,12 @@ pub struct SessionStatus {
     pub branch: String,
     pub dirty: bool,
     pub unexported_commits: u64,
-    pub filesystem_state: String,
+    pub filesystem_state: FsState,
     pub filesystem_backend: FilesystemBackendKind,
-    pub git_state: String,
-    pub semantic_state: String,
-    pub runtime_state: String,
-    pub lifecycle: String,
+    pub git_state: LayerStatus,
+    pub semantic_state: LayerStatus,
+    pub runtime_state: LayerStatus,
+    pub lifecycle: Lifecycle,
     pub upper_files: u64,
     pub filesystem_bytes_written: u64,
     pub root: String,
@@ -99,20 +116,25 @@ pub struct SessionStatus {
 
 impl Session {
     pub fn root_path(&self) -> PathBuf {
-        PathBuf::from(&self.session_dir).join("fs").join("root")
+        self.session_dir.join("fs/root")
     }
 
     pub fn upper_path(&self) -> PathBuf {
-        PathBuf::from(&self.session_dir).join("fs").join("upper")
+        self.session_dir.join("fs/upper")
     }
 
     pub fn git_dir(&self) -> PathBuf {
-        PathBuf::from(&self.session_dir).join("git")
+        self.session_dir.join("git")
+    }
+
+    pub fn is_active_mount(&self) -> bool {
+        self.lifecycle == Lifecycle::Ready && self.filesystem.state == FsState::Mounted
     }
 }
 
 struct CreatePlan {
     id: String,
+    name: String,
     session_dir: PathBuf,
     upper: PathBuf,
     work: PathBuf,
@@ -130,7 +152,6 @@ struct CreatePlan {
     preferred: FilesystemBackendKind,
     last_working: Option<FilesystemBackendKind>,
     needs_sudo: Option<bool>,
-    name: String,
 }
 
 impl SessionStore {
@@ -143,75 +164,60 @@ impl SessionStore {
         name: &str,
         repo_ref: Option<&str>,
         from: Option<&str>,
-    ) -> Result<Session> {
+    ) -> Result<(Session, CreateTimings)> {
         validate_name(name)?;
 
-        // Hold the sessions lock only while reserving the name and laying out dirs.
-        // Mount + git setup run unlocked so parallel creates are not serialized on FUSE.
-        let plan = {
-            let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
-            if self.find_by_name(name)?.is_some() || self.name_claimed(name)? {
-                bail!("session name already exists: {name}");
-            }
-
-            let repo = match repo_ref {
-                Some(r) => self.repos.get(r)?,
-                None => {
-                    let list = self.repos.list()?;
-                    match list.len() {
-                        0 => bail!("no repositories registered; run `lazytree repo add <path>`"),
-                        1 => list.into_iter().next().unwrap(),
-                        _ => bail!("multiple repositories registered; pass --repo <id>"),
-                    }
+        let repo = match repo_ref {
+            Some(r) => self.repos.get(r)?,
+            None => {
+                let list = self.repos.list()?;
+                match list.len() {
+                    0 => bail!("no repositories registered; run `lazytree repo add <path>`"),
+                    1 => list.into_iter().next().unwrap(),
+                    _ => bail!("multiple repositories registered; pass --repo <id>"),
                 }
-            };
-
-            let id = format!(
-                "session_{}",
-                &uuid::Uuid::new_v4().to_string().replace('-', "")[..12]
-            );
-            let session_dir = self.paths.session_dir(&id);
-            let fs_dir = session_dir.join("fs");
-            let upper = fs_dir.join("upper");
-            let work = fs_dir.join("work");
-            let root = fs_dir.join("root");
-            let git_dir = session_dir.join("git");
-
-            fs::create_dir_all(&upper)?;
-            fs::create_dir_all(&work)?;
-            fs::create_dir_all(&root)?;
-            fs::create_dir_all(&git_dir)?;
-            fs::create_dir_all(session_dir.join("runtime"))?;
-            let semantic = SemanticPaths::for_session(
-                &self.paths.repo_dir(&repo.id),
-                &session_dir,
-            );
-            semantic.ensure()?;
-            self.claim_name(name, &id)?;
-
-            let cfg = load_config(&self.paths)?;
-            CreatePlan {
-                id,
-                session_dir,
-                upper,
-                work,
-                root,
-                git_dir,
-                repo_id: repo.id.clone(),
-                repo_base_path: PathBuf::from(&repo.base_path),
-                repo_base_commit: repo.base_commit.clone(),
-                object_store: PathBuf::from(&repo.object_store),
-                seed_index: repo.seed_index.as_ref().map(PathBuf::from),
-                user_name: repo.user_name.clone(),
-                user_email: repo.user_email.clone(),
-                base_revision: from.unwrap_or(repo.base_commit.as_str()).to_string(),
-                branch: format!("lazytree/{name}"),
-                preferred: cfg.filesystem_backend,
-                last_working: cfg.last_working_backend,
-                needs_sudo: cfg.mount_needs_sudo,
-                name: name.to_string(),
             }
         };
+        let cfg = load_config(&self.paths)?;
+
+        let id = format!("session_{}", short_id());
+        let session_dir = self.paths.session_dir(&id);
+        let fs_dir = session_dir.join("fs");
+        let plan = CreatePlan {
+            id,
+            name: name.to_string(),
+            upper: fs_dir.join("upper"),
+            work: fs_dir.join("work"),
+            root: fs_dir.join("root"),
+            git_dir: session_dir.join("git"),
+            session_dir,
+            repo_id: repo.id.clone(),
+            repo_base_path: PathBuf::from(&repo.base_path),
+            repo_base_commit: repo.base_commit.clone(),
+            object_store: PathBuf::from(&repo.object_store),
+            seed_index: repo.seed_index.as_ref().map(PathBuf::from),
+            user_name: repo.user_name.clone(),
+            user_email: repo.user_email.clone(),
+            base_revision: from.unwrap_or(repo.base_commit.as_str()).to_string(),
+            branch: format!("lazytree/{name}"),
+            preferred: cfg.filesystem_backend,
+            last_working: cfg.last_working_backend,
+            needs_sudo: cfg.mount_needs_sudo,
+        };
+
+        // Lock only for name reservation — mount/git run unlocked.
+        {
+            let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
+            if self.name_claimed(&plan.name)? {
+                bail!("session name already exists: {}", plan.name);
+            }
+            self.claim_name(&plan.name, &plan.id)?;
+        }
+
+        fs::create_dir_all(&plan.git_dir)?;
+        fs::create_dir_all(plan.session_dir.join("runtime"))?;
+        SemanticPaths::for_session(&self.paths.repo_dir(&plan.repo_id), &plan.session_dir)
+            .ensure_roots()?;
 
         let mount_start = std::time::Instant::now();
         let mounted = match filesystem::mount_session(MountRequest {
@@ -234,15 +240,15 @@ impl SessionStore {
 
         let git_start = std::time::Instant::now();
         if let Err(err) = git::setup_session_git(&GitSetup {
-            git_dir: plan.git_dir.clone(),
-            work_tree: plan.root.clone(),
-            branch: plan.branch.clone(),
-            base_revision: plan.base_revision.clone(),
-            object_store: plan.object_store.clone(),
-            seed_index: plan.seed_index.clone(),
-            seed_commit: Some(plan.repo_base_commit.clone()),
-            user_name: plan.user_name.clone(),
-            user_email: plan.user_email.clone(),
+            git_dir: &plan.git_dir,
+            work_tree: &plan.root,
+            branch: &plan.branch,
+            base_revision: &plan.base_revision,
+            object_store: &plan.object_store,
+            seed_index: plan.seed_index.as_deref(),
+            seed_commit: Some(plan.repo_base_commit.as_str()),
+            user_name: plan.user_name.as_deref(),
+            user_email: plan.user_email.as_deref(),
         }) {
             let _ = filesystem::umount_with_backend(&plan.root, Some(mounted.backend));
             let _ = self.cleanup_failed_create(&plan);
@@ -255,51 +261,51 @@ impl SessionStore {
             version: 1,
             id: plan.id.clone(),
             name: plan.name.clone(),
-            repository_id: plan.repo_id.clone(),
-            base_revision: plan.base_revision.clone(),
-            branch: plan.branch.clone(),
+            repository_id: plan.repo_id,
+            base_revision: plan.base_revision,
+            branch: plan.branch,
             filesystem: FilesystemMeta {
                 backend: mounted.backend,
-                state: "mounted".into(),
+                state: FsState::Mounted,
             },
             git: LayerState {
-                state: "ready".into(),
+                state: LayerStatus::Ready,
             },
             semantic: LayerState {
-                state: "inherited".into(),
+                state: LayerStatus::Inherited,
             },
             runtime: RuntimeMeta {
                 backend: "local".into(),
-                state: "none".into(),
+                state: LayerStatus::None,
             },
             created_at: now,
             updated_at: now,
-            session_dir: plan.session_dir.display().to_string(),
-            lifecycle: "ready".into(),
+            session_dir: plan.session_dir.clone(),
+            lifecycle: Lifecycle::Ready,
         };
         atomic_write_json(&plan.session_dir.join("metadata.json"), &session)?;
-        LAST_CREATE_TIMINGS.with(|t| {
-            *t.borrow_mut() = Some(CreateTimings {
-                filesystem_ms,
-                git_ms,
-                total_ms: filesystem_ms + git_ms,
-            });
-        });
-        // Warm FUSE page cache + git index for first `git status` without
-        // blocking create. Cold status on fuse-overlayfs can be 10× warm.
+
+        let timings = CreateTimings {
+            filesystem_ms,
+            git_ms,
+            total_ms: filesystem_ms + git_ms,
+        };
+
+        if std::env::var_os("LAZYTREE_WARM_STATUS").as_deref() != Some(std::ffi::OsStr::new("0"))
         {
             let root = session.root_path();
             std::thread::spawn(move || {
-                let _ = std::process::Command::new("git")
+                let _ = Command::new("git")
                     .args(["-C"])
                     .arg(&root)
                     .args(["status", "-sb", "--porcelain"])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status();
             });
         }
-        Ok(session)
+
+        Ok((session, timings))
     }
 
     pub fn list(&self) -> Result<Vec<Session>> {
@@ -311,7 +317,6 @@ impl SessionStore {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            // Skip the .names reservation directory.
             if path.file_name().is_some_and(|n| n == ".names") {
                 continue;
             }
@@ -325,11 +330,8 @@ impl SessionStore {
     }
 
     pub fn get(&self, name_or_id: &str) -> Result<Session> {
-        if let Some(s) = self.find_by_name(name_or_id)? {
-            return Ok(s);
-        }
         for s in self.list()? {
-            if s.id == name_or_id {
+            if s.name == name_or_id || s.id == name_or_id {
                 return Ok(s);
             }
         }
@@ -341,7 +343,7 @@ impl SessionStore {
         let root = session.root_path();
         let upper = session.upper_path();
 
-        let dirty = if root.exists() && session.filesystem.state == "mounted" {
+        let dirty = if session.is_active_mount() && root.exists() {
             !git_porcelain(&root)?.is_empty()
         } else {
             false
@@ -358,17 +360,17 @@ impl SessionStore {
         let semantic = self.semantic_paths(&session)?;
 
         Ok(SessionStatus {
-            id: session.id.clone(),
-            name: session.name.clone(),
-            branch: session.branch.clone(),
+            id: session.id,
+            name: session.name,
+            branch: session.branch,
             dirty,
             unexported_commits: unexported,
-            filesystem_state: session.filesystem.state.clone(),
+            filesystem_state: session.filesystem.state,
             filesystem_backend: session.filesystem.backend,
-            git_state: session.git.state.clone(),
-            semantic_state: session.semantic.state.clone(),
-            runtime_state: session.runtime.state.clone(),
-            lifecycle: session.lifecycle.clone(),
+            git_state: session.git.state,
+            semantic_state: session.semantic.state,
+            runtime_state: session.runtime.state,
+            lifecycle: session.lifecycle,
             upper_files,
             filesystem_bytes_written: bytes,
             root: root.display().to_string(),
@@ -379,67 +381,46 @@ impl SessionStore {
     }
 
     pub fn semantic_paths(&self, session: &Session) -> Result<SemanticPaths> {
-        let paths = SemanticPaths::for_session(
-            &self.paths.repo_dir(&session.repository_id),
-            Path::new(&session.session_dir),
-        );
-        paths.ensure()?;
+        let paths =
+            SemanticPaths::for_session(&self.paths.repo_dir(&session.repository_id), &session.session_dir);
+        paths.ensure_roots()?;
         Ok(paths)
-    }
-
-    #[allow(dead_code)]
-    pub fn exec(&self, name_or_id: &str, argv: &[String]) -> Result<i32> {
-        self.exec_with(name_or_id, argv, &crate::runtime::ExecOptions::default())
     }
 
     pub fn exec_with(
         &self,
         name_or_id: &str,
         argv: &[String],
-        opts: &crate::runtime::ExecOptions,
+        opts: &runtime::ExecOptions,
     ) -> Result<i32> {
         let session = self.get(name_or_id)?;
         let semantic = self.semantic_paths(&session)?;
-        LocalRuntimeBackend.exec(&session, &semantic, argv, opts)
+        runtime::exec(&session, &semantic, argv, opts)
     }
 
     pub fn cache_promote(&self, name_or_id: &str) -> Result<()> {
         let session = self.get(name_or_id)?;
         let semantic = self.semantic_paths(&session)?;
-        crate::runtime::promote_session_target_to_shared(&semantic)
+        runtime::promote_session_target_to_shared(&semantic)
     }
 
     pub fn cache_seed(&self, name_or_id: &str) -> Result<bool> {
         let session = self.get(name_or_id)?;
         let semantic = self.semantic_paths(&session)?;
-        crate::runtime::seed_session_target_from_shared(&semantic)
+        runtime::seed_session_target_from_shared(&semantic)
     }
 
     pub fn diff(&self, name_or_id: &str) -> Result<String> {
         let session = self.get(name_or_id)?;
         ensure_active_fs(&session)?;
-        let out = Command::new("git")
-            .args(["-C"])
-            .arg(session.root_path())
-            .args(["diff", "HEAD"])
-            .output()
-            .context("git diff")?;
-        if !out.status.success() {
-            bail!(
-                "git diff failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        let root = session.root_path();
+        let out = git::git_c(&root, &["diff", "HEAD"])?;
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        let staged = Command::new("git")
-            .args(["-C"])
-            .arg(session.root_path())
-            .args(["diff", "--cached"])
-            .output()
-            .context("git diff --cached")?;
-        if staged.status.success() && !staged.stdout.is_empty() {
-            text.push_str("\n# staged\n");
-            text.push_str(&String::from_utf8_lossy(&staged.stdout));
+        if let Ok(staged) = git::git_c(&root, &["diff", "--cached"]) {
+            if !staged.stdout.is_empty() {
+                text.push_str("\n# staged\n");
+                text.push_str(&String::from_utf8_lossy(&staged.stdout));
+            }
         }
         Ok(text)
     }
@@ -447,70 +428,55 @@ impl SessionStore {
     pub fn archive(&self, name_or_id: &str) -> Result<Session> {
         let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
         let mut session = self.get(name_or_id)?;
-        if session.lifecycle == "archived" {
+        if session.lifecycle == Lifecycle::Archived {
             bail!("session already archived: {}", session.name);
         }
         ensure_active_fs(&session)?;
 
         let repo = self.repos.get(&session.repository_id)?;
-        // Publish branch into the user's source repository.
-        let status = Command::new("git")
-            .arg("--git-dir")
-            .arg(session.git_dir())
-            .args([
+        let status = git::run_git(
+            &session.git_dir(),
+            None,
+            &[
                 "push",
-                &repo.source_path,
+                repo.source_path.as_str(),
                 &format!("HEAD:refs/heads/{}", session.branch),
-            ])
-            .output()
-            .context("git push to source repository")?;
-        if !status.status.success() {
-            bail!(
-                "failed to publish branch to {}: {}",
-                repo.source_path,
-                String::from_utf8_lossy(&status.stderr).trim()
-            );
+            ],
+        );
+        if let Err(e) = status {
+            bail!("failed to publish branch to {}: {e}", repo.source_path);
         }
 
         let root = session.root_path();
         filesystem::umount_with_backend(&root, Some(session.filesystem.backend))?;
 
-        // Drop expensive ephemeral layers; keep metadata.
-        let fs_dir = PathBuf::from(&session.session_dir).join("fs");
+        let fs_dir = session.session_dir.join("fs");
         for sub in ["upper", "work", "root"] {
             let p = fs_dir.join(sub);
-            if p.exists() {
-                let _ = fs::remove_dir_all(&p);
-                let _ = fs::create_dir_all(&p);
-            }
+            let _ = fs::remove_dir_all(&p);
+            let _ = fs::create_dir_all(&p);
         }
         let git_dir = session.git_dir();
         if git_dir.exists() {
             fs::remove_dir_all(&git_dir)?;
         }
-        let runtime = PathBuf::from(&session.session_dir).join("runtime");
-        if runtime.exists() {
-            let _ = fs::remove_dir_all(&runtime);
-            let _ = fs::create_dir_all(&runtime);
-        }
-        let semantic = PathBuf::from(&session.session_dir)
-            .join("semantic")
-            .join("writable");
-        if semantic.exists() {
-            let _ = fs::remove_dir_all(&semantic);
-            let _ = fs::create_dir_all(&semantic);
+        for p in [
+            session.session_dir.join("runtime"),
+            session.session_dir.join("semantic/writable"),
+        ] {
+            if p.exists() {
+                let _ = fs::remove_dir_all(&p);
+                let _ = fs::create_dir_all(&p);
+            }
         }
 
-        session.filesystem.state = "archived".into();
-        session.git.state = "published".into();
-        session.semantic.state = "none".into();
-        session.runtime.state = "none".into();
-        session.lifecycle = "archived".into();
+        session.filesystem.state = FsState::Archived;
+        session.git.state = LayerStatus::Published;
+        session.semantic.state = LayerStatus::None;
+        session.runtime.state = LayerStatus::None;
+        session.lifecycle = Lifecycle::Archived;
         session.updated_at = Utc::now();
-        atomic_write_json(
-            &PathBuf::from(&session.session_dir).join("metadata.json"),
-            &session,
-        )?;
+        atomic_write_json(&session.session_dir.join("metadata.json"), &session)?;
         Ok(session)
     }
 
@@ -518,8 +484,8 @@ impl SessionStore {
         let _lock = locking::try_lock(&self.paths.locks_dir().join("sessions.lock"))?;
         let session = self.get(name_or_id)?;
 
-        if session.lifecycle != "archived" && !force {
-            if session.filesystem.state == "mounted" {
+        if session.lifecycle != Lifecycle::Archived && !force {
+            if session.filesystem.state == FsState::Mounted {
                 let dirty = !git_porcelain(&session.root_path())?.is_empty();
                 let unexported = count_unexported(&session)?;
                 if dirty || unexported > 0 {
@@ -543,26 +509,15 @@ impl SessionStore {
         let root = session.root_path();
         let backend = Some(session.filesystem.backend);
         if force {
-            // Always attempt tools — mount detection can lag behind privileged FUSE.
             let _ = filesystem::umount_force(&root, backend);
         } else if filesystem::is_mounted(&root)? {
             filesystem::umount_with_backend(&root, backend)
                 .with_context(|| format!("unmounting {}", root.display()))?;
         }
 
-        let dir = PathBuf::from(&session.session_dir);
-        remove_session_tree(&dir)?;
+        remove_session_tree(&session.session_dir)?;
         let _ = self.release_name(&session.name);
         Ok(())
-    }
-
-    fn find_by_name(&self, name: &str) -> Result<Option<Session>> {
-        for s in self.list()? {
-            if s.name == name {
-                return Ok(Some(s));
-            }
-        }
-        Ok(None)
     }
 
     fn name_claim_path(&self, name: &str) -> PathBuf {
@@ -576,8 +531,7 @@ impl SessionStore {
     fn claim_name(&self, name: &str, id: &str) -> Result<()> {
         let dir = self.paths.session_name_claim_dir();
         fs::create_dir_all(&dir)?;
-        fs::write(self.name_claim_path(name), id)
-            .with_context(|| format!("claiming session name {name}"))?;
+        fs::write(self.name_claim_path(name), id)?;
         Ok(())
     }
 
@@ -597,8 +551,6 @@ impl SessionStore {
     }
 }
 
-/// Remove a session directory tree. Privileged fuse-overlayfs leaves root-owned
-/// files under `fs/work`; fall back to `sudo rm -rf` when needed.
 fn remove_session_tree(dir: &Path) -> Result<()> {
     if !dir.exists() {
         return Ok(());
@@ -606,22 +558,20 @@ fn remove_session_tree(dir: &Path) -> Result<()> {
     if fs::remove_dir_all(dir).is_ok() {
         return Ok(());
     }
-    // Overlay workdirs from sudo fuse-overlayfs are often root-owned.
     let _ = Command::new("sudo")
         .args(["-n", "rm", "-rf", "--"])
         .arg(dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("sudo rm -rf session dir")?;
-    if !dir.exists() {
-        return Ok(());
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if dir.exists() {
+        fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))?;
     }
-    fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))
+    Ok(())
 }
 
 fn ensure_active_fs(session: &Session) -> Result<()> {
-    if session.lifecycle == "archived" || session.filesystem.state != "mounted" {
+    if !session.is_active_mount() {
         bail!("session {} is not an active mounted workspace", session.name);
     }
     if !filesystem::is_mounted(&session.root_path())? {
@@ -634,41 +584,21 @@ fn ensure_active_fs(session: &Session) -> Result<()> {
 }
 
 fn git_porcelain(work_tree: &Path) -> Result<String> {
-    let out = Command::new("git")
-        .args(["-C"])
-        .arg(work_tree)
-        .args(["status", "--porcelain"])
-        .output()
-        .context("git status")?;
-    if !out.status.success() {
-        bail!(
-            "git status failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
+    let out = git::git_c(work_tree, &["status", "--porcelain"])?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn count_unexported(session: &Session) -> Result<u64> {
-    let out = Command::new("git")
-        .arg("--git-dir")
-        .arg(session.git_dir())
-        .args([
+    let out = git::run_git(
+        &session.git_dir(),
+        None,
+        &[
             "rev-list",
             "--count",
             &format!("{}..HEAD", session.base_revision),
-        ])
-        .output()
-        .context("git rev-list")?;
-    if !out.status.success() {
-        // If rev-list fails (e.g. missing git), treat as unknown/unsafe.
-        bail!(
-            "git rev-list failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let n = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>()?;
-    Ok(n)
+        ],
+    )?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().parse()?)
 }
 
 fn dir_stats(path: &Path) -> Result<(u64, u64)> {
@@ -685,8 +615,7 @@ fn dir_stats(path: &Path) -> Result<(u64, u64)> {
         }
         if p.is_dir() {
             for entry in fs::read_dir(p)? {
-                let entry = entry?;
-                walk(&entry.path(), files, bytes)?;
+                walk(&entry?.path(), files, bytes)?;
             }
         }
         Ok(())
@@ -696,11 +625,8 @@ fn dir_stats(path: &Path) -> Result<(u64, u64)> {
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("session name must not be empty");
-    }
-    if name.contains('/') || name.contains('\0') {
-        bail!("session name must not contain '/' or NUL");
+    if name.is_empty() || name.contains('/') || name.contains('\0') {
+        bail!("session name must be non-empty and not contain '/' or NUL");
     }
     Ok(())
 }

@@ -9,6 +9,7 @@ mod repository;
 mod runtime;
 mod semantic;
 mod session;
+mod util;
 
 use std::process::ExitCode;
 
