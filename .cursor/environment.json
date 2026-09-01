@@ -1,0 +1,4 @@
+{
+  "name": "LazyTree",
+  "install": "bash .cursor/install.sh"
+}
