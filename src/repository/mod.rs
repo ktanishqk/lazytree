@@ -1,7 +1,7 @@
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -240,47 +240,69 @@ fn git_config_get(repo: &Path, key: &str) -> Option<String> {
 /// Copy a worktree into `dst`, omitting `.git` so OverlayFS lowerdirs stay
 /// free of Git metadata (session create then only writes a small gitdir file).
 ///
+/// Snapshot **committed** files only (`git archive`). A raw `rsync --exclude=.git`
+/// also copies gitignored build output (`target/`, `node_modules/`). On Fuse-T,
+/// Cursor opening those files for write copy-ups the whole blob into upper.
+///
 /// Important: do **not** `cp -a src/.` then delete `.git`. Right after a commit,
 /// git auto-gc can move loose objects while `cp` walks `.git/objects`, causing
 /// flaky `cannot stat` failures on medium+ repos.
 fn copy_worktree_excluding_git(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
 
-    // Prefer rsync exclude (fast, correct). Fall back to tar exclude.
-    let rsync = Command::new("rsync")
-        .args(["-a", "--delete", "--exclude=.git"])
-        .arg(format!("{}/", src.display()))
-        .arg(format!("{}/", dst.display()))
-        .status();
-    match rsync {
-        Ok(st) if st.success() => {}
-        _ => {
-            let status = Command::new("bash")
-                .arg("-c")
-                .arg(format!(
-                    "tar -C {} --exclude=.git -cf - . | tar -C {} -xf -",
-                    shell_quote(&src.display().to_string()),
-                    shell_quote(&dst.display().to_string()),
-                ))
-                .status()
-                .context("tar exclude .git worktree copy")?;
-            if !status.success() {
-                bail!(
-                    "copying worktree (excluding .git) failed from {} to {}",
-                    src.display(),
-                    dst.display()
-                );
+    if git_archive_to(src, dst).is_err() {
+        let rsync = Command::new("rsync")
+            .args(["-a", "--delete", "--exclude=.git", "--exclude=target"])
+            .arg(format!("{}/", src.display()))
+            .arg(format!("{}/", dst.display()))
+            .status();
+        match rsync {
+            Ok(st) if st.success() => {}
+            _ => {
+                let status = Command::new("bash")
+                    .arg("-c")
+                    .arg(format!(
+                        "tar -C {} --exclude=.git --exclude=target -cf - . | tar -C {} -xf -",
+                        shell_quote(&src.display().to_string()),
+                        shell_quote(&dst.display().to_string()),
+                    ))
+                    .status()
+                    .context("tar exclude .git worktree copy")?;
+                if !status.success() {
+                    bail!(
+                        "copying worktree (excluding .git) failed from {} to {}",
+                        src.display(),
+                        dst.display()
+                    );
+                }
             }
         }
     }
 
-    let embedded_git = dst.join(".git");
-    if embedded_git.exists() {
-        if embedded_git.is_dir() {
-            fs::remove_dir_all(&embedded_git)?;
-        } else {
-            fs::remove_file(&embedded_git)?;
-        }
+    Ok(())
+}
+
+fn git_archive_to(src: &Path, dst: &Path) -> Result<()> {
+    let mut git = Command::new("git")
+        .args(["-C"])
+        .arg(src)
+        .args(["archive", "--format=tar", "HEAD"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("git archive")?;
+    let stdout = git.stdout.take().context("git archive stdout")?;
+    let tar = Command::new("tar")
+        .args(["-C"])
+        .arg(dst)
+        .args(["-xf", "-"])
+        .stdin(stdout)
+        .status()
+        .context("tar extract git archive")?;
+    let git_st = git.wait().context("git archive wait")?;
+    if !git_st.success() || !tar.success() {
+        bail!("git archive | tar failed from {}", src.display());
     }
     Ok(())
 }
