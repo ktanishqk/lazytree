@@ -44,7 +44,8 @@ real `git status` only inspects changed paths. Disable with `LAZYTREE_FSMONITOR=
 
 ```bash
 cargo build --release
-./target/release/lazytree --help
+./scripts/install.sh          # copies to ~/.local/bin/lazytree
+lazytree --help
 ```
 
 ## CLI

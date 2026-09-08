@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -109,8 +109,10 @@ fn walk_upper(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
             continue;
         }
         if ft.is_dir() {
-            // Directories in upper matter for untracked discovery.
-            out.push(rel_str);
+            // Walk mkdir parents of copy-ups, but do not report them. Git treats
+            // a directory path as "invalidate this whole cone" — that re-walks
+            // the FUSE tree after one edit if we planted fsmonitor-valid bits
+            // without native stats.
             walk_upper(root, &path, out)?;
         }
     }
@@ -149,7 +151,7 @@ fi
 printf 'lt:%s\0' "$n"
 if [[ -d "$UPPER" ]]; then
   # Portable walk (GNU find -printf is Linux-only; macOS uses this path if LT_BIN missing).
-  find "$UPPER" \( -type f -o -type l -o -type c -o -type d \) ! -path "$UPPER" 2>/dev/null \
+  find "$UPPER" \( -type f -o -type l -o -type c \) ! -path "$UPPER" 2>/dev/null \
     | while IFS= read -r p; do
         rel="${{p#"$UPPER"/}}"
         case "$rel" in .git|.git/*) continue ;; esac
@@ -194,6 +196,37 @@ fi
     Ok(())
 }
 
+/// Mark every index entry fsmonitor-valid so the first `git status` skips
+/// a full-tree `lstat` (Fuse-T NFS ~1.3ms/file). Uses Git only — no extra deps.
+pub fn seed_index_fsmonitor_valid(git_dir: &Path, _work_tree: &Path) -> Result<()> {
+    if std::env::var_os("LAZYTREE_FSMONITOR").as_deref() == Some(std::ffi::OsStr::new("0")) {
+        return Ok(());
+    }
+    let abs_git = abs_path(git_dir);
+    let mut ls = Command::new("git")
+        .args(["--git-dir"])
+        .arg(&abs_git)
+        .args(["ls-files", "-z"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("git ls-files")?;
+    let stdout = ls.stdout.take().context("git ls-files stdout")?;
+    let status = Command::new("git")
+        .args(["--git-dir"])
+        .arg(&abs_git)
+        .args(["update-index", "--fsmonitor", "--fsmonitor-valid", "-z", "--stdin"])
+        .stdin(stdout)
+        .status()
+        .context("git update-index --fsmonitor-valid")?;
+    let ls_st = ls.wait().context("git ls-files wait")?;
+    if !ls_st.success() || !status.success() {
+        bail!("failed to seed fsmonitor-valid bits on {}", abs_git.display());
+    }
+    Ok(())
+}
+
 fn shell_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
@@ -219,10 +252,21 @@ mod tests {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/a.rs"), b"x").unwrap();
         fs::write(dir.join(".wh.gone.txt"), b"").unwrap();
-        let mut paths = list_upper_paths(&dir).unwrap();
-        paths.sort();
+        let paths = list_upper_paths(&dir).unwrap();
         let _ = fs::remove_dir_all(&dir);
-        assert!(paths.iter().any(|p| p == "src" || p == "src/a.rs"));
+        assert!(paths.iter().any(|p| p == "src/a.rs"));
+        assert!(!paths.iter().any(|p| p == "src"));
         assert!(paths.iter().any(|p| p == "gone.txt"));
+    }
+
+    #[test]
+    fn copyup_parents_are_not_listed() {
+        let dir = std::env::temp_dir().join(format!("lt-fsm-cone-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src/001")).unwrap();
+        fs::write(dir.join("src/001/f-1.txt"), b"x").unwrap();
+        let paths = list_upper_paths(&dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(paths, vec!["src/001/f-1.txt".to_string()]);
     }
 }

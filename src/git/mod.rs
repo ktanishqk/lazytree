@@ -50,8 +50,10 @@ pub fn setup_session_git(cfg: &GitSetup<'_>) -> Result<()> {
         )?;
         copy_file(cfg.seed_index.unwrap(), &cfg.git_dir.join("index"))?;
         write_session_config(cfg)?;
+        write_appledouble_exclude(cfg.git_dir)?;
         write_gitdir_pointer(cfg)?;
         crate::fsmonitor::install_session_fsmonitor(cfg.git_dir, cfg.upper_dir)?;
+        crate::fsmonitor::seed_index_fsmonitor_valid(cfg.git_dir, cfg.work_tree)?;
         return Ok(());
     }
 
@@ -82,8 +84,10 @@ pub fn setup_session_git(cfg: &GitSetup<'_>) -> Result<()> {
     }
 
     write_session_config(cfg)?;
+    write_appledouble_exclude(cfg.git_dir)?;
     write_gitdir_pointer(cfg)?;
     crate::fsmonitor::install_session_fsmonitor(cfg.git_dir, cfg.upper_dir)?;
+    crate::fsmonitor::seed_index_fsmonitor_valid(cfg.git_dir, cfg.work_tree)?;
     Ok(())
 }
 
@@ -97,18 +101,24 @@ fn write_alternates(git_dir: &Path, abs_objects: &Path) -> Result<()> {
 }
 
 fn write_gitdir_pointer(cfg: &GitSetup<'_>) -> Result<()> {
-    let overlay_git = cfg.work_tree.join(".git");
-    if overlay_git.exists() {
-        if overlay_git.is_dir() {
-            fs::remove_dir_all(&overlay_git)
-                .with_context(|| format!("whiteout {}", overlay_git.display()))?;
+    // Write into upperdir on the real disk. Writing `.git` through the Fuse-T
+    // mount makes macOS drop AppleDouble `._.git`, which Git then reads as the
+    // gitfile ("invalid gitfile format").
+    fs::create_dir_all(cfg.upper_dir)?;
+    let dest = cfg.upper_dir.join(".git");
+    if dest.exists() {
+        if dest.is_dir() {
+            fs::remove_dir_all(&dest)
+                .with_context(|| format!("whiteout {}", dest.display()))?;
         } else {
-            fs::remove_file(&overlay_git)?;
+            fs::remove_file(&dest)?;
         }
     }
     let abs_git = abs_path(cfg.git_dir);
-    fs::write(&overlay_git, format!("gitdir: {}\n", abs_git.display()))
-        .with_context(|| format!("writing {}", overlay_git.display()))?;
+    fs::write(&dest, format!("gitdir: {}\n", abs_git.display()))
+        .with_context(|| format!("writing {}", dest.display()))?;
+    let _ = fs::remove_file(cfg.upper_dir.join("._.git"));
+    let _ = fs::remove_file(cfg.work_tree.join("._.git"));
     Ok(())
 }
 
@@ -149,6 +159,15 @@ fn write_session_config(cfg: &GitSetup<'_>) -> Result<()> {
         }
     }
     fs::write(cfg.git_dir.join("config"), body)?;
+    Ok(())
+}
+
+/// Fuse-T writes AppleDouble `._*` sidecars. Keep them out of `git status`.
+fn write_appledouble_exclude(git_dir: &Path) -> Result<()> {
+    let info = git_dir.join("info");
+    fs::create_dir_all(&info)?;
+    fs::write(info.join("exclude"), "._*\n")
+        .with_context(|| format!("writing {}", info.join("exclude").display()))?;
     Ok(())
 }
 
